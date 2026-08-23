@@ -232,22 +232,69 @@ async fn a_signal_from_the_connected_peer_is_accepted() {
 }
 
 #[tokio::test]
-async fn a_structurally_invalid_signal_is_dropped_even_when_correctly_signed() {
+async fn an_expired_ttl_is_refused_and_reported_not_silently_dropped() {
     let (runtime, addr, mut events) = start_node().await;
     let mut peer = RawPeer::connect(addr, 4).await;
     assert_eq!(runtime.wait_for_peers(1, Duration::from_secs(5)).await, 1);
 
-    // TTL zero is expired on arrival. It is inside the signed body, so this is
-    // a peer signing something it should never have sent rather than an
-    // on-path edit — but the node must refuse it either way.
+    // TTL zero is exhausted on arrival. It must reach the routing layer, which
+    // refuses it and owes an acknowledged sender a receipt — an earlier version
+    // ran `Signal::validate()` at the transport boundary and dropped it as
+    // "malformed", turning a reportable refusal into silence.
     let mut expired = Signal::data("expired")
         .with_weight(0.5)
         .with_ttl(0)
+        .acknowledged()
         .build_unsigned(peer.node_id.clone());
     ntl_core::crypto::sign_signal(&ClassicalModule, &mut expired, &peer.private).expect("sign");
     peer.send(&expired).await;
 
-    let seen = drain(&mut events, Duration::from_millis(400)).await;
+    let seen = drain(&mut events, Duration::from_millis(500)).await;
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::Refused { reason, .. } if *reason == ntl_core::RejectReason::TtlExhausted
+        )),
+        "an exhausted TTL must be refused, not silently dropped, saw {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::Malformed { .. })),
+        "TTL exhaustion is a routing outcome, not a malformed signal, saw {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::Handled { .. })),
+        "an expired signal must not be handled, saw {seen:?}"
+    );
+
+    // And the sender is told. The receipt comes back over the same session.
+    let receipt = tokio::time::timeout(
+        Duration::from_secs(2),
+        ntl_net::frame::read_signal(&mut peer.stream),
+    )
+    .await
+    .expect("an acknowledged refusal must produce a receipt")
+    .expect("a readable signal");
+    assert_eq!(receipt.signal_type, SignalType::Receipt);
+}
+
+#[tokio::test]
+async fn a_weight_outside_the_valid_range_is_malformed() {
+    let (runtime, addr, mut events) = start_node().await;
+    let mut peer = RawPeer::connect(addr, 8).await;
+    assert_eq!(runtime.wait_for_peers(1, Duration::from_secs(5)).await, 1);
+
+    // Weight is in the signed body, so this is a peer signing something it
+    // should never have sent rather than an on-path edit. `check_propagable`
+    // only tests the lower bound, so this is the one structural check the
+    // routing layer cannot make.
+    let mut bad = Signal::data("overweight")
+        .with_weight(0.5)
+        .build_unsigned(peer.node_id.clone());
+    bad.weight = 4.0;
+    ntl_core::crypto::sign_signal(&ClassicalModule, &mut bad, &peer.private).expect("sign");
+    peer.send(&bad).await;
+
+    let seen = drain(&mut events, Duration::from_millis(500)).await;
     assert!(
         seen.iter().any(|e| matches!(e, Event::Malformed { .. })),
         "expected a malformed-signal drop, saw {seen:?}"

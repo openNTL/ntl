@@ -102,7 +102,10 @@ The signal MUST be propagated to ALL active synapses (excluding the synapse it a
 **Constraints:**
 - Flood signals SHOULD have low TTL (≤ 3) to prevent network saturation
 - A node MUST NOT propagate a flood whose hop count has reached the scope's
-  `max_hops`. Flood is the only scope that ignores `max_propagation_fanout`,
+  `max_hops`, and MUST still accept and process one that has. The bound is on
+  forwarding, not on acceptance: enforcing it as an admission check makes the
+  outermost ring of a flood reject the signal instead of delivering it, so
+  `max_hops: n` reaches `n − 1` rings. Flood is the only scope that ignores `max_propagation_fanout`,
   so depth is the sole bound on total fan-out: a flood of depth `d` across
   nodes of degree `f` touches on the order of `f^d` synapses. An
   implementation that declares `max_hops` and does not enforce it has a flood

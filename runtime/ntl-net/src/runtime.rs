@@ -407,13 +407,14 @@ impl Runtime {
                             // *positive* receipt without forwarding, so a
                             // relay node reported delivery for a signal it
                             // then dropped.
+                            let body = pending.lock().await.remove(&queued.id);
                             release_signal(
                                 &node,
                                 &identity,
                                 &sessions,
-                                &pending,
                                 &events,
                                 queued.id,
+                                body,
                                 None,
                                 Release::Guard,
                             )
@@ -614,10 +615,30 @@ async fn read_loop(
             }
         };
 
-        // Verification comes after framing but before any routing work, as
-        // Propagation Rule 5 requires. The origin's key is known for a direct
-        // peer, and also for a relayed signal whose origin we happen to have a
-        // session with.
+        // Verification comes after framing and before any routing work.
+        //
+        // This is *not* the order Propagation Rule 5 states. Rule 5 asks for
+        // the cheap checks — size, TTL, dedup — to run first, so that an
+        // attacker cannot force signature work with malformed traffic. Size is
+        // enforced in `frame::read_signal`, before any allocation. TTL and
+        // dedup are not, and deliberately:
+        //
+        //   - Dedup has a side effect. `check_and_set_seen` *claims* the id,
+        //     so running it before verification would let unauthenticated
+        //     traffic occupy the dedup cache and suppress the genuine signal
+        //     that follows. That is a cheaper attack than the one Rule 5's
+        //     ordering defends against.
+        //   - TTL exhaustion owes an acknowledged sender a receipt. Emitting
+        //     one for a signal we have not verified means an attacker chooses
+        //     when this node emits traffic and to whom.
+        //
+        // An Ed25519 verification is tens of microseconds against a frame that
+        // has already been read off the socket, so the work Rule 5 is trying to
+        // avoid is small next to either of those. Raised on the PR as a spec
+        // amendment rather than settled here.
+        //
+        // The origin's key is known for a direct peer, and also for a relayed
+        // signal whose origin we happen to have a session with.
         let origin_key = if signal.origin == peer.node_id {
             Some(peer.public_key.clone())
         } else {
@@ -663,15 +684,21 @@ async fn read_loop(
             continue;
         }
 
-        // Structural validation comes after the signature: a signal with a
-        // weight outside [0, 1] or an expired TTL is malformed no matter who
-        // signed it, and the checks are cheap enough that the ordering is
-        // about clarity rather than cost.
-        if let Err(e) = signal.validate() {
+        // Structural validation, but deliberately *not* `Signal::validate()`
+        // wholesale. That also rejects `ttl == 0`, and TTL exhaustion is a
+        // routing outcome the sender is owed a receipt for
+        // (delivery-semantics §2.2) — dropping it here turned a reportable
+        // refusal into silence. TTL therefore flows on to `receive`, which
+        // refuses it through `check_propagable` and produces the receipt.
+        //
+        // What is left is the check `receive` genuinely cannot make: a weight
+        // outside [0, 1] is a protocol violation rather than a routing
+        // decision, and `check_propagable` only tests the lower bound.
+        if !(0.0..=1.0).contains(&signal.weight) {
             let _ = events
                 .send(Event::Malformed {
                     peer: peer.node_id.clone(),
-                    reason: e.to_string(),
+                    reason: format!("weight {} out of range [0.0, 1.0]", signal.weight),
                 })
                 .await;
             continue;
@@ -707,18 +734,10 @@ async fn read_loop(
             .flatten()
             .map(|r| r.id);
 
-        // Cache the body before deciding anything. The activation gate is a
-        // queue, so this signal may be released later — in a batch triggered
-        // by a *different* arrival, or by the latency guard — and at that
-        // point only the cache still has it. Caching unconditionally and
-        // removing on release is what makes the two release paths identical.
-        remember_body(pending, node, &signal).await;
-
         let disposition = match node.receive(&signal, arrival.as_ref()) {
             Ok(d) => d,
             Err(e) => {
                 tracing::warn!(error = %e, "receive failed");
-                pending.lock().await.remove(&signal.id);
                 continue;
             }
         };
@@ -746,14 +765,15 @@ async fn read_loop(
             send_receipt(node, identity, sessions, receipt, &signal.origin, peer).await;
         }
         if let Some(reason) = disposition.rejected {
-            pending.lock().await.remove(&signal.id);
             let _ = events
                 .send(Event::Refused {
                     signal_id: signal.id,
                     reason,
                 })
                 .await;
-            continue;
+            // Deliberately no `continue`: refusing *this* signal says nothing
+            // about the rest of the batch the gate may have drained on its way
+            // in, and skipping the loop below discarded that batch entirely.
         }
 
         // Everything the gate released, not just this arrival. `fire` drains a
@@ -761,39 +781,63 @@ async fn read_loop(
         // once; handling only the arrival dropped the rest silently — no
         // local handling, no forward, and no receipt for their senders.
         for released in &disposition.handle_locally {
-            let plan = if released.id == signal.id {
-                Some(disposition.forward_to.clone())
+            // The arrival's body is in hand. Anything else came out of the
+            // queue, so its body is in the cache.
+            let (body, plan) = if released.id == signal.id {
+                (Some(signal.clone()), Some(disposition.forward_to.clone()))
             } else {
-                None
+                (pending.lock().await.remove(&released.id), None)
             };
             release_signal(
                 node,
                 identity,
                 sessions,
-                pending,
                 events,
                 released.id,
+                body,
                 plan,
                 Release::Threshold,
             )
             .await;
         }
+
+        // Retain the body only while the gate is actually holding the signal.
+        // Caching before `receive` leaked an entry for every duplicate: a
+        // dedup hit and a successful enqueue both look like an empty
+        // disposition from outside, so the cache filled with bodies nothing
+        // would ever release and then began evicting live ones.
+        if disposition.queued {
+            remember_body(pending, node, &signal).await;
+        }
     }
 }
 
-/// Cache a signal body against a later release, bounded by the queue depth.
+/// Cache a signal body while the activation gate is holding it.
 ///
-/// Evicts the oldest entry when full rather than declining to insert. Refusing
-/// to insert meant the map saturated permanently — nothing removed entries
-/// except the guard path — after which every subsequent release had no body,
-/// so it could not be forwarded and `ntl listen` stopped showing it.
+/// The cache mirrors the gate's queue: an entry is added when a signal is
+/// enqueued and removed on every way back out — fired, released by the guard,
+/// displaced by overflow, or refused. So its size is bounded by the queue
+/// depth without needing a policy of its own, and it must not have one:
+/// evicting on any criterion the gate does not share drops the body of a
+/// signal still queued, which then releases with nothing to forward.
+///
+/// The cap below is a leak backstop, not a mechanism. Reaching it means the
+/// mirror has drifted, which is a bug in this file rather than a condition to
+/// handle quietly — hence the warning.
 async fn remember_body(pending: &PendingBodies, node: &Arc<Node>, signal: &Signal) {
-    let cap = node.config().activation.max_queue_depth.max(1);
+    let queue_depth = node.config().activation.max_queue_depth.max(1);
     let mut guard = pending.lock().await;
-    if guard.len() >= cap {
+    if guard.len() >= queue_depth.saturating_mul(2) {
         // SignalId is a ULID, so the smallest is the oldest.
         if let Some(oldest) = guard.keys().min().copied() {
             guard.remove(&oldest);
+            tracing::warn!(
+                cached = guard.len() + 1,
+                queue_depth,
+                "signal body cache exceeded twice the queue depth; evicting. \
+                 This means a queued signal's body was not released — a bug, \
+                 not backpressure."
+            );
         }
     }
     guard.insert(signal.id, signal.clone());
@@ -824,14 +868,16 @@ async fn release_signal(
     node: &Arc<Node>,
     identity: &Arc<Identity>,
     sessions: &Arc<RwLock<HashMap<NodeId, Session>>>,
-    pending: &PendingBodies,
     events: &mpsc::Sender<Event>,
     signal_id: ntl_core::SignalId,
+    body: Option<Signal>,
     plan: Option<Vec<ntl_core::node::Forward>>,
     how: Release,
 ) {
-    let Some(body) = pending.lock().await.remove(&signal_id) else {
-        // The body aged out of the cache. Report the release so an operator
+    let Some(body) = body else {
+        // No body: the gate is holding an id this process never saw a body
+        // for, which is what a restart looks like — the activation snapshot is
+        // persisted, the body cache is not. Report the release so an operator
         // sees it rather than losing the signal without trace, but there is
         // nothing left to forward.
         let _ = events

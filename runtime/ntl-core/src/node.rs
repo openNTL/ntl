@@ -40,6 +40,26 @@ pub struct Disposition {
     /// the delivery guarantee, and the caller cannot infer who to tell from
     /// the arrival alone.
     pub evicted: Option<Evicted>,
+    /// Whether the arriving signal is now sitting in the activation queue.
+    ///
+    /// The caller must retain its body while this is true, and only while it
+    /// is true. A caller that cannot tell "queued" from "dropped as a
+    /// duplicate" — both of which otherwise look like an empty disposition —
+    /// either leaks a body per duplicate or discards one it will need when
+    /// the signal is released.
+    pub queued: bool,
+}
+
+/// Everything in `fired` except the signal being refused.
+///
+/// A refusal and a local handling are contradictory outcomes for the same
+/// signal, so the refused one is removed — but the *rest* of the batch the
+/// gate drained is unrelated work that must not be thrown away with it.
+fn without(
+    fired: Vec<crate::activation::QueuedSignal>,
+    refused: crate::SignalId,
+) -> Vec<crate::activation::QueuedSignal> {
+    fired.into_iter().filter(|q| q.id != refused).collect()
 }
 
 /// A queued signal displaced by a later arrival.
@@ -69,6 +89,7 @@ impl Disposition {
             receipt: None,
             rejected: None,
             evicted: None,
+            queued: false,
         }
     }
 
@@ -82,6 +103,7 @@ impl Disposition {
                 .then(|| Receipt::rejected(signal.id, reason, hops)),
             rejected: Some(reason),
             evicted: None,
+            queued: false,
         }
     }
 
@@ -211,6 +233,7 @@ impl Node {
             receipt: None,
             rejected: None,
             evicted: None,
+            queued: false,
         })
     }
 
@@ -273,7 +296,15 @@ impl Node {
         if let Some(dropped) = &admit.dropped {
             let reason = admit.drop_reason.unwrap_or(RejectReason::QueueFull);
             if dropped.id == signal.id {
-                return Ok(Disposition::refuse(signal, reason, hops));
+                // The arrival itself was shed. Note that `admit` enqueues
+                // *before* it evaluates, so the arrival's own contribution can
+                // have fired the gate on its way in even though the overflow
+                // policy then chose it as the drop. Whatever that fire drained
+                // is real work that a bare refusal would throw away.
+                return Ok(Disposition {
+                    handle_locally: without(admit.fired, signal.id),
+                    ..Disposition::refuse(signal, reason, hops)
+                });
             }
             // A different signal was displaced to make room for this one. Its
             // sender is owed the same receipt the arriving signal would have
@@ -287,20 +318,32 @@ impl Node {
             });
         }
 
-        if admit.fired.is_empty() {
-            // Queued, not refused. Nothing to do yet beyond any eviction.
-            return Ok(Disposition {
-                evicted,
-                ..Disposition::nothing()
-            });
-        }
+        // Did *this* signal come back out, or is it still queued? The gate
+        // drains the top `fire_batch_size` by weight, so an arrival can trigger
+        // a fire it is not itself part of.
+        let fired_here = admit.fired.iter().any(|q| q.id == signal.id);
 
-        // Route onward.
-        let forward_to = self.plan_forwarding(signal, arrival_synapse, now)?;
+        // Only a signal that is leaving now needs a route. One still in the
+        // queue is planned when it is released, which is also the more correct
+        // moment: the topology may change while it waits.
+        let forward_to = if fired_here {
+            self.plan_forwarding(signal, arrival_synapse, now)?
+        } else {
+            Vec::new()
+        };
 
-        if forward_to.is_empty() && signal.requires_receipt() {
-            // Nowhere to send it and the sender must be told.
+        if fired_here && forward_to.is_empty() && signal.requires_receipt() {
+            // Nowhere to send it and the sender must be told. A relay with no
+            // onward route reports that rather than claiming delivery: this
+            // node firing the signal is not the same as the signal arriving
+            // where it was going, and reporting `delivered` here would make
+            // every routeless node a black hole that teaches senders their
+            // dead path works.
+            //
+            // The rest of the batch is unaffected and must still be handled —
+            // only the arrival is refused.
             return Ok(Disposition {
+                handle_locally: without(admit.fired, signal.id),
                 evicted,
                 ..Disposition::refuse(signal, RejectReason::NoRoute, hops)
             });
@@ -312,6 +355,7 @@ impl Node {
             receipt: None,
             rejected: None,
             evicted,
+            queued: !fired_here,
         })
     }
 
@@ -378,6 +422,15 @@ impl Node {
         arrival_synapse: Option<&SynapseId>,
         now_ns: u64,
     ) -> crate::Result<Vec<Forward>> {
+        // A flood that has travelled as far as its emitter allowed is still
+        // handled locally; it simply goes no further. Checked here rather than
+        // in `check_propagable`, which also gates acceptance — refusing there
+        // made the outermost ring reject the flood instead of delivering it,
+        // so `max_hops: 3` reached two rings.
+        if propagation::flood_depth_reached(signal) {
+            return Ok(Vec::new());
+        }
+
         let records = self
             .store
             .list_synapses(&SynapseFilter::eligible())
@@ -641,6 +694,25 @@ impl Node {
             .synapse_for_peer(peer)
             .map_err(|e| crate::Error::Serialization(e.to_string()))?
         {
+            // A reconnecting peer whose synapse has gone Dormant must be able
+            // to carry traffic again. Returning the record unchanged made
+            // Dormant terminal in practice: it is ineligible to carry signals,
+            // and weight is only earned by carrying them, so nothing could
+            // lift it until the 7-day prune. `reactivate` existed for this and
+            // had no callers.
+            //
+            // The handshake has just completed, which is exactly the evidence
+            // synapse-lifecycle asks for — the peer is demonstrably alive.
+            if existing.state == crate::synapse::SynapseState::Dormant {
+                let mut synapse =
+                    Synapse::from_record(&existing, self.identity.clone(), self.synapse_config());
+                synapse.reactivate(self.synapse_config());
+                let record = synapse.to_record();
+                self.store
+                    .put_synapse(&record)
+                    .map_err(|e| crate::Error::Serialization(e.to_string()))?;
+                return Ok(record);
+            }
             return Ok(existing);
         }
 

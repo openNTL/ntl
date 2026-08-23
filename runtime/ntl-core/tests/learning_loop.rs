@@ -706,9 +706,205 @@ fn incoming(signal: &Signal, origin: u8) -> Signal {
     let mut arrived = signal.clone();
     arrived.origin = test_node_id(origin);
     // A fresh identifier so the node's own dedup claim does not swallow it.
-    arrived.id = ntl_core::SignalId::from_parts(
-        signal.id.timestamp_ms(),
-        u128::from(origin) << 96 | u128::from(signal.id.timestamp_ms()),
-    );
+    //
+    // Derived from the original id's bytes rather than `from_parts`. ULID
+    // randomness is 80 bits, so the previous `origin << 96` landed above that
+    // field and was truncated away — leaving `timestamp_ms` as the only input,
+    // which a `ManualClock` never advances. Every call therefore produced the
+    // *same* id, and any test needing two distinct arrivals silently got one
+    // arrival and one dedup hit.
+    let mut bytes = signal.id.to_bytes();
+    bytes[15] ^= origin;
+    // Always perturb a second byte, so the result also differs from the id the
+    // node claimed when it emitted the signal.
+    bytes[14] ^= 0xA5;
+    arrived.id = ntl_core::SignalId::from_bytes(bytes);
     arrived
+}
+
+// ---------------------------------------------------------------------------
+// The batch is the unit of work.
+//
+// `admit` enqueues before it evaluates, so an arrival can fire the gate and
+// then be refused on the same call. The refusal must not take the batch with
+// it: those signals came from other senders and are unrelated to why this one
+// was turned away.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_refused_arrival_does_not_discard_the_batch_it_fired() {
+    // No synapses, so the arrival has no route and is refused as NoRoute —
+    // while the gate has already drained what was queued behind it.
+    let mut config = NodeConfig::default();
+    config.activation.base_threshold = 0.025;
+    config.activation.fire_batch_size = 8;
+    config.activation.max_queue_latency_ms = 60_000;
+    config.activation.refractory_period_ms = 0;
+    config.activation.dynamic_threshold = false;
+    let (node, _clock) = test_node_with_config(240, config);
+
+    // Two light best-effort signals queue up without firing.
+    let mut queued = Vec::new();
+    for i in 0..2u8 {
+        let signal = node
+            .emit(Signal::data("light").with_weight(0.01))
+            .expect("emit");
+        let arrived = incoming(&signal, 40 + i);
+        let disposition = node.receive(&arrived, None).expect("receive");
+        assert!(
+            disposition.queued,
+            "0.01 must sit below the threshold: {disposition:?}"
+        );
+        assert!(disposition.handle_locally.is_empty());
+        queued.push(arrived.id);
+    }
+
+    // A heavy acknowledged arrival crosses the threshold, so the gate drains
+    // the batch — and then the arrival itself is refused for want of a route.
+    let signal = node
+        .emit(Signal::data("heavy").with_weight(0.9).acknowledged())
+        .expect("emit");
+    let arrived = incoming(&signal, 44);
+    let disposition = node.receive(&arrived, None).expect("receive");
+
+    assert_eq!(
+        disposition.rejected,
+        Some(RejectReason::NoRoute),
+        "with no synapses the acknowledged arrival must be refused"
+    );
+    assert!(disposition.receipt.is_some(), "and its sender must be told");
+
+    // The refusal is about the arrival alone.
+    let released: Vec<_> = disposition.handle_locally.iter().map(|q| q.id).collect();
+    for id in &queued {
+        assert!(
+            released.contains(id),
+            "the batch the arrival fired must survive its refusal. Missing \
+             {id}; released {released:?}"
+        );
+    }
+    assert!(
+        !released.contains(&arrived.id),
+        "the refused signal must not also be reported as handled — those are \
+         contradictory outcomes for one signal"
+    );
+}
+
+#[test]
+fn a_dedup_hit_is_not_reported_as_queued() {
+    // `queued` is what tells a transport whether to retain the body. A
+    // duplicate and a successful enqueue both otherwise look like an empty
+    // disposition, and conflating them leaks one body per duplicate until the
+    // cache evicts bodies that are still needed.
+    let (node, _clock) = test_node(241);
+    let _peers = with_peers(&node, 2);
+
+    let signal = node
+        .emit(Signal::data("once").with_weight(0.01))
+        .expect("emit");
+    let arrived = incoming(&signal, 9);
+
+    let first = node.receive(&arrived, None).expect("receive");
+    assert!(first.queued, "a below-threshold signal is held by the gate");
+
+    let second = node.receive(&arrived, None).expect("receive");
+    assert!(
+        !second.queued,
+        "a duplicate is dropped, not queued, so its body must not be retained"
+    );
+    assert!(second.handle_locally.is_empty());
+    assert!(second.rejected.is_none(), "dedup is silent, not a refusal");
+}
+
+#[test]
+fn a_reconnecting_peer_leaves_the_dormant_state() {
+    // Dormant is ineligible to carry signals, and weight is only earned by
+    // carrying them — so without an explicit way out it is terminal until the
+    // 7-day prune. `reactivate` existed for this and had no callers.
+    let (node, _clock) = test_node(242);
+    let peer = test_node_id(1);
+    node.upsert_synapse(&peer).expect("synapse");
+
+    // Drive the weight under the dormancy threshold.
+    let record = node
+        .store()
+        .synapse_for_peer(&peer)
+        .expect("store")
+        .expect("synapse");
+    let mut dormant = record.clone();
+    dormant.weight = 0.001;
+    dormant.state = ntl_core::synapse::SynapseState::Dormant;
+    node.store().put_synapse(&dormant).expect("store");
+
+    assert!(
+        !node
+            .store()
+            .list_synapses(&SynapseFilter::eligible())
+            .expect("store")
+            .iter()
+            .any(|s| s.peer == peer),
+        "a dormant synapse must not be routable"
+    );
+
+    // The peer reconnects: the handshake completes, which is the evidence
+    // synapse-lifecycle asks for.
+    let revived = node.upsert_synapse(&peer).expect("synapse");
+    assert_eq!(revived.state, ntl_core::synapse::SynapseState::Active);
+    assert!(
+        node.store()
+            .list_synapses(&SynapseFilter::eligible())
+            .expect("store")
+            .iter()
+            .any(|s| s.peer == peer),
+        "a reconnected peer must be routable again"
+    );
+}
+
+#[test]
+fn a_flood_at_its_depth_is_handled_but_not_forwarded() {
+    use ntl_core::propagation::PropagationScope;
+
+    let mut config = NodeConfig::default();
+    // Three arrivals in one test, so the node must not be refractory between
+    // them — otherwise the later ones never fire and the assertion about local
+    // handling would pass or fail for the wrong reason.
+    config.activation.refractory_period_ms = 0;
+    let (node, _clock) = test_node_with_config(243, config);
+    let _peers = with_peers(&node, 3);
+
+    let signal = node
+        .emit(
+            Signal::data("discover")
+                .with_weight(0.9)
+                .with_scope(PropagationScope::Flood { max_hops: 2 }),
+        )
+        .expect("emit");
+
+    // One hop travelled: still spreading.
+    let mut arrived = incoming(&signal, 9);
+    arrived.trace = vec![test_node_id(50)];
+    let disposition = node.receive(&arrived, None).expect("receive");
+    assert!(
+        !disposition.forward_to.is_empty(),
+        "a flood inside its depth must keep spreading"
+    );
+
+    // Two hops: the emitter's depth is spent. The node still accepts and
+    // handles it — refusing would mean the outermost ring never sees the
+    // flood — but forwards nothing.
+    let mut edge = incoming(&signal, 10);
+    edge.trace = vec![test_node_id(50), test_node_id(51)];
+    let disposition = node.receive(&edge, None).expect("receive");
+    assert!(
+        disposition.rejected.is_none(),
+        "reaching max_hops must not make the signal unacceptable"
+    );
+    assert!(
+        disposition.forward_to.is_empty(),
+        "a flood at its depth must not be forwarded further"
+    );
+    assert!(
+        disposition.handle_locally.iter().any(|q| q.id == edge.id),
+        "and it must still be handled here"
+    );
 }

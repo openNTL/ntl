@@ -57,6 +57,14 @@ pending queue:
 3. Reset `potential` to `0.0` **after** the batch, not per signal.
 4. Enter the refractory period.
 
+A node MUST retain whatever a released signal needs to be processed — for the
+reference implementation, the signal body, since the queue itself holds only
+scheduling state. That retention MUST be tied to queue membership and MUST NOT
+have an eviction policy of its own: anything evicted on a criterion the queue
+does not share belongs to a signal that is still queued, which then releases
+with nothing to process. A deduplicated arrival in particular is not queued, and
+retaining it leaks one entry per duplicate.
+
 Signals left in the queue remain queued and are eligible for the next fire.
 They MUST NOT be discarded merely because they were not in this batch.
 
@@ -179,6 +187,15 @@ A dropped signal's delivery class governs whether the drop is reported:
 A node MUST NOT drop an `acknowledged` signal without emitting a receipt,
 even under overflow. Overload is not an exemption from the delivery
 guarantee — it is the case the guarantee exists for.
+
+**A refused arrival does not refuse the batch.** Admission enqueues before it
+evaluates, so an arrival's own contribution can fire the gate on its way in and
+the overflow policy can then choose that same arrival as the drop. It can also
+fire a batch it is not itself part of, since the drain takes the top
+`fire_batch_size` by weight. Either way the batch is other senders' traffic and
+has nothing to do with why this signal was turned away: a node MUST process it
+and MUST NOT report the refused signal as also handled — those are
+contradictory outcomes for one signal.
 
 This holds for the *displaced* signal as much as the refused arrival. Under
 `drop_lowest_weight` and `drop_oldest` the signal dropped is usually **not**

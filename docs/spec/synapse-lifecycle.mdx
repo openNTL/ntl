@@ -145,6 +145,19 @@ An implementation that promotes on the first weight update makes the state
 skippable, and with it the guarantee that traffic only ever crosses an
 authenticated synapse.
 
+### Dormant Must Not Be Terminal
+
+`Dormant` is ineligible to carry signals, and weight is earned only by carrying
+them ([learning-model](/spec/learning-model) §2). So a node that provides no way
+out of `Dormant` has made it terminal in all but name: the synapse cannot earn
+its way back and simply waits out `prune_after_hours`.
+
+**A completed handshake with a dormant peer MUST return the synapse to
+`Active`** with its weight restored to `initial_weight`. The handshake is the
+evidence the table above asks for — the peer is demonstrably reachable and
+authenticated. An implementation that treats an existing synapse record as
+nothing to do will strand every peer that was ever quiet for long enough.
+
 ## Transport Negotiation
 
 During handshake, nodes negotiate transport:

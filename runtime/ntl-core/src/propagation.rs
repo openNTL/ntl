@@ -351,17 +351,30 @@ pub fn check_propagable(
     if signal.weight < config.min_propagation_weight {
         return Err(RejectReason::BelowThreshold);
     }
-    // Flood's own hop bound. The field existed and was read by nothing, so a
-    // caller asking for `Flood { max_hops: 2 }` got a flood that ran to TTL —
-    // and since Flood also ignores `max_fanout`, that is the one scope where
-    // an unbounded depth multiplies across every synapse at every hop. The
-    // trace length is the hop count: it is appended to on each forward.
-    if let PropagationScope::Flood { max_hops } = &signal.scope {
-        if signal.trace.len() >= usize::from(*max_hops) {
-            return Err(RejectReason::TtlExhausted);
-        }
-    }
     Ok(())
+}
+
+/// Whether a flood has reached the depth its emitter asked for.
+///
+/// Kept out of [`check_propagable`], which gates *acceptance* as well as
+/// propagation. Refusing there made the outer ring of a flood reject the
+/// signal instead of delivering it, so `max_hops: 3` reached two rings — the
+/// bound belongs on the forwarding decision, not on whether this node may
+/// process what it was sent.
+///
+/// The field previously existed and was read by nothing, so a flood ran to
+/// TTL. Flood is also the one scope that ignores `max_fanout`, which makes
+/// depth the sole bound on total fan-out: a flood of depth `d` across nodes of
+/// degree `f` touches on the order of `f^d` synapses.
+///
+/// Trace length is the hop count — [`crate::signal::Signal::hop`] appends to it
+/// on each forward.
+#[must_use]
+pub fn flood_depth_reached(signal: &crate::signal::Signal) -> bool {
+    match &signal.scope {
+        PropagationScope::Flood { max_hops } => signal.trace.len() >= usize::from(*max_hops),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -412,10 +425,12 @@ mod tests {
     }
 
     #[test]
-    fn flood_max_hops_bounds_the_flood() {
-        // The field was declared and read by nothing, so a flood ran to TTL.
-        // Flood is also the one scope that ignores max_fanout, which makes
-        // depth the only bound on total fan-out.
+    fn flood_max_hops_bounds_forwarding_not_acceptance() {
+        // Two bugs in one test. The field was declared and read by nothing, so
+        // a flood ran to TTL; and the first fix put the bound in
+        // `check_propagable`, which also gates *acceptance* — so the outermost
+        // ring refused the flood instead of delivering it, and `max_hops: 2`
+        // reached one ring.
         let config = PropagationConfig::default();
         let local = NodeId(vec![0u8; 32]);
 
@@ -424,30 +439,36 @@ mod tests {
             .with_scope(PropagationScope::Flood { max_hops: 2 })
             .build_unsigned(NodeId(vec![7u8; 32]));
 
-        // Fresh out of the emitter: no hops yet, so it may propagate.
+        // Zero hops: accept, and forward.
         assert!(check_propagable(&signal, &local, &config).is_ok());
+        assert!(!flood_depth_reached(&signal));
 
+        // One hop: accept, and still forward.
         signal.trace.push(NodeId(vec![1u8; 32]));
+        assert!(check_propagable(&signal, &local, &config).is_ok());
+        assert!(!flood_depth_reached(&signal));
+
+        // Two hops: the emitter's depth is spent. The node must still *accept*
+        // it — it was sent here, and refusing would mean the last ring of a
+        // flood never sees it — but must not forward it further.
+        signal.trace.push(NodeId(vec![2u8; 32]));
         assert!(
             check_propagable(&signal, &local, &config).is_ok(),
-            "one hop of a two-hop flood must still propagate"
+            "reaching max_hops must not make the signal unacceptable"
         );
-
-        signal.trace.push(NodeId(vec![2u8; 32]));
-        assert_eq!(
-            check_propagable(&signal, &local, &config),
-            Err(crate::delivery::RejectReason::TtlExhausted),
-            "a flood must stop at max_hops even with TTL to spare"
+        assert!(
+            flood_depth_reached(&signal),
+            "a flood must stop forwarding at max_hops even with TTL to spare"
         );
         assert!(signal.ttl > 0, "the point is that TTL was not the bound");
 
         // Other scopes are unaffected.
-        let weighted = crate::signal::Signal::data("weighted")
+        let mut weighted = crate::signal::Signal::data("weighted")
             .with_weight(0.9)
             .build_unsigned(NodeId(vec![7u8; 32]));
-        let mut weighted = weighted;
         weighted.trace = vec![NodeId(vec![1u8; 32]), NodeId(vec![2u8; 32])];
         assert!(check_propagable(&weighted, &local, &config).is_ok());
+        assert!(!flood_depth_reached(&weighted));
     }
 
     // -- scoring -----------------------------------------------------------
