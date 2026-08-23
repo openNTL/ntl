@@ -5,7 +5,7 @@ description: "Specification for synapse formation, state transitions, and prunin
 "og:description": "Formal specification for synapse formation, state transitions, weight adjustment, and pruning in NTL."
 "twitter:title": "NTL Synapse Lifecycle Spec"
 ---
-**Version:** 0.1.0-draft
+**Version:** 0.2.0-draft
 
 ## Overview
 
@@ -52,14 +52,35 @@ New synapses MUST start with weight ≤ 0.1. This prevents new or unknown nodes 
 
 ### Weight Adjustment
 
-Weight increases when:
-- A signal is successfully transmitted and acknowledged: `w += signal.weight * 0.01`
-- Weight MUST NOT exceed the configured `max_weight` (default: 1.0)
+Synapse weight is **learned**, not configured. The normative update rule,
+its bounds, and its hyperparameters are specified in
+[learning-model](/spec/learning-model); this section states only the
+lifecycle-relevant consequences.
 
-Weight decreases when:
-- Time passes without activity: `w *= (1.0 - decay_rate)` per decay interval
-- A signal transmission fails: `w *= 0.9`
-- An invalid signal is received: `w *= 0.5`
+Weight changes on three occasions:
+
+| Occasion | Effect | Reference |
+|---|---|---|
+| A routing decision resolves to an outcome | `w ← clamp(w + η·r·x, w_min, w_max)` | [learning-model](/spec/learning-model) §2.1 |
+| Time passes | Exponential decay with half-life `t½` | [learning-model](/spec/learning-model) §3 |
+| An unverifiable signature arrives | `w ← max(w·(1−p), w_min)`, `p = 0.5` | [threat-model](/spec/threat-model) §4 |
+
+Two constraints bind every adjustment:
+
+- Weight MUST NOT exceed `max_weight` (default `1.0`) or fall below
+  `w_min` (default `0.001`).
+- Total outbound weight across all of a node's synapses MUST be bounded by
+  `W_max`, rescaling all synapses when the bound is exceeded. Without this a
+  node's synapses all saturate and the scoring function stops
+  discriminating.
+
+<Note>
+0.1.0-draft specified `w += signal.weight * 0.01` on success and
+`w *= (1 - decay_rate)` per interval. Both are superseded. The old
+increment had no notion of *whether delivery actually succeeded* — it
+rewarded transmission, not outcome — and interval-based decay gave a
+different result depending on how often the sweep happened to run.
+</Note>
 
 ### Thresholds
 
@@ -81,3 +102,10 @@ During handshake, nodes negotiate transport:
 ## Synapse Limits
 
 Nodes SHOULD enforce a maximum synapse count to prevent resource exhaustion. The RECOMMENDED default is 1,000 active synapses per node. When the limit is reached, the node MUST reject new synapse requests or prune the weakest existing synapse.
+
+
+## Related
+
+- [learning-model](/spec/learning-model) — how weight and affinity are learned
+- [propagation-rules](/spec/propagation-rules) — how weight is used in routing
+- [storage-interface](/spec/storage-interface) §1 — what must survive a restart

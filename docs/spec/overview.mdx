@@ -6,7 +6,7 @@ mode: "wide"
 "og:description": "The formal specification for the Neural Transfer Layer protocol, covering signals, synapses, propagation, activation, and cryptographic interfaces."
 "twitter:title": "NTL Specification"
 ---
-**Version:** 0.1.0-draft
+**Version:** 0.2.0-draft
 **Status:** Working Draft
 **Authors:** The Bundu Foundation
 **License:** Apache 2.0
@@ -46,16 +46,43 @@ The NTL specification is divided into the following documents:
   <Card title="Adapter Contract" icon="plug" href="/spec/adapter-contract">
     Interface specification for protocol translation adapters
   </Card>
+  <Card title="Learning Model" icon="brain" href="/spec/learning-model">
+    Reward signals, weight updates, decay, and exploration sampling
+  </Card>
+  <Card title="Delivery Semantics" icon="paper-plane" href="/spec/delivery-semantics">
+    Best-effort and acknowledged delivery, retry, and idempotency
+  </Card>
+  <Card title="Threat Model" icon="shield-halved" href="/spec/threat-model">
+    Adversarial analysis, and what NTL does not defend against
+  </Card>
+  <Card title="Storage Interface" icon="database" href="/spec/storage-interface">
+    What a node must persist, and durability per deployment class
+  </Card>
 </CardGroup>
+
+## Changes in 0.2.0-draft
+
+This revision closes the gaps that made the routing claims uncheckable and
+the protocol unusable for transactional traffic.
+
+| Change | Document |
+|---|---|
+| Routing model given an explicit reward signal, update rule, decay, and exploration policy | **new** [learning-model](/spec/learning-model) |
+| Adversarial analysis of learned routing, with an explicit out-of-scope list | **new** [threat-model](/spec/threat-model) |
+| `acknowledged` delivery class — failure is always reported | **new** [delivery-semantics](/spec/delivery-semantics) |
+| Storage defined as a pluggable contract, not a named database | **new** [storage-interface](/spec/storage-interface) |
+| Firing ambiguity resolved; bounded queue and overflow policy specified; refractory period made a node-class parameter | [activation-model](/spec/activation-model) |
+| Deterministic top-N fanout replaced with stochastic sampling; receipt handling and outcome journalling added | [propagation-rules](/spec/propagation-rules) |
 
 ## Design Goals
 
 1. **Signal-native** — The fundamental data unit is a signal, not a request
 2. **Self-organizing** — Network topology emerges from usage patterns
-3. **Crypto-agile** — No cryptographic scheme is hardcoded
-4. **Resource-efficient** — Designed for constrained devices and networks
-5. **Interoperable** — Adapters enable Web2, Web3, and legacy system connectivity
-6. **Open** — Fully open source, community-governed specification
+3. **Storage-agnostic** — Nodes persist state through a pluggable interface; no database is privileged
+4. **Crypto-agile** — No cryptographic scheme is hardcoded
+5. **Resource-efficient** — Designed for constrained devices and networks
+6. **Interoperable** — Adapters enable Web2, Web3, and legacy system connectivity
+7. **Open** — Fully open source, community-governed specification
 
 ## Versioning
 
@@ -70,7 +97,7 @@ The reference implementation is maintained by Nyuchi Web Services under The Bund
 
 - **Repository:** [github.com/openNTL/ntl](https://github.com/openNTL/ntl)
 - **Language:** Rust
-- **Minimum Rust Version:** 1.75
+- **Minimum Rust Version:** 1.85
 - **License:** Apache 2.0
 
 The reference implementation is authoritative for behavior not fully specified in this document. Where the specification and implementation differ, the specification takes precedence, and the implementation should be updated.

@@ -5,7 +5,7 @@ description: "Binary format specification for NTL signals"
 "og:description": "The binary wire format specification for NTL signals, including encoding, headers, and payload structure."
 "twitter:title": "NTL Signal Format Spec"
 ---
-**Version:** 0.1.0-draft
+**Version:** 0.2.0-draft
 
 ## Overview
 
@@ -64,6 +64,7 @@ The body is a CBOR map with the following fields:
   "cor": bytes(16),          ; Correlation ID - OPTIONAL
   "trace": [bytes(32)...],   ; Node ID path - OPTIONAL
   "tags": [text...],         ; Searchable tags - OPTIONAL
+  "del": uint8,              ; Delivery class - OPTIONAL (default: best-effort)
 }
 ```
 
@@ -152,9 +153,54 @@ The body is a CBOR map with the following fields:
 | 3 | Command | Requests an action |
 | 4 | Heartbeat | Maintains synapse liveness |
 | 5 | Discovery | Announces node capability |
-| 6 | Ack | Confirms signal receipt |
+| 6 | Receipt | Reports the outcome of an acknowledged signal |
 | 7-14 | Reserved | Future protocol use |
 | 15 | Custom | Application-defined |
+
+### del (Delivery Class)
+
+- **Type:** Unsigned 8-bit integer
+- **Requirement:** OPTIONAL (default: 0 = best-effort)
+- **Values:**
+
+| Value | Class | Guarantee |
+|---|---|---|
+| 0 | `best-effort` | None; may be silently absorbed |
+| 1 | `acknowledged` | At-least-once, or the sender learns it failed |
+| 2-255 | Reserved | — |
+
+The delivery class is part of the **signed body**, so an intermediate node
+cannot downgrade it. A node that does not support `acknowledged` MUST reject
+such a signal with a negative receipt rather than accept it and degrade
+silently. See [delivery-semantics](/spec/delivery-semantics).
+
+## Receipt Signals
+
+A `Receipt` (type 6) reports the outcome of an `acknowledged` signal. It
+MUST set `cor` to the identifier of the signal it acknowledges, and MUST use
+scope `Targeted` toward that signal's origin.
+
+Its payload is a CBOR map:
+
+```cbor
+{
+  "status": text,     ; "delivered" | "rejected" - REQUIRED
+  "hops":   uint16,   ; hops taken to reach the handler - REQUIRED
+  "reason": text,     ; REQUIRED when status = "rejected"
+}
+```
+
+`reason` takes one of the values enumerated in
+[delivery-semantics](/spec/delivery-semantics) §2.2.
+
+A `Receipt` MUST NOT itself be `acknowledged` — receipts are not
+acknowledged, so the protocol cannot recurse.
+
+<Note>
+Signal type 6 was named `Ack` in 0.1.0-draft. The wire value is unchanged;
+the type now carries a structured outcome rather than bare confirmation,
+since a plain acknowledgement cannot express *why* a signal failed.
+</Note>
 
 ## Validation Rules
 
@@ -170,8 +216,19 @@ A signal is valid if and only if:
 8. The `sig` (signature) verifies against the `origin` node's public key
 9. The `ts` (timestamp) is not in the future (with 30-second tolerance)
 10. The signal `id` has not been seen before (deduplication)
+11. The `del` (delivery class) is a value this node supports
 
-Nodes MUST silently drop invalid signals. Nodes MUST NOT propagate invalid signals.
+Nodes MUST drop invalid signals and MUST NOT propagate them.
+
+Validation MUST be ordered cheapest-first: magic bytes, version, size, TTL,
+and deduplication **before** signature verification (rule 8). Verifying
+first lets an attacker impose expensive asymmetric cryptography with
+malformed traffic; see [threat-model](/spec/threat-model) §5.
+
+Dropping is silent for `best-effort` signals. For an `acknowledged` signal
+that fails rules 1-7 or 9, the node cannot trust the origin field enough to
+reply and MUST drop silently; for one that fails only rule 11, it MUST emit
+a negative receipt with reason `unsupported_type`.
 
 ## Maximum Signal Size
 

@@ -54,7 +54,7 @@
               "guides/quickstart",
               "guides/first-signal",
               "guides/building-adapters",
-              "guides/siafu-integration"
+              "guides/storage-backends"
             ]
           },
           {
@@ -96,6 +96,10 @@
               "spec/synapse-lifecycle",
               "spec/propagation-rules",
               "spec/activation-model",
+              "spec/learning-model",
+              "spec/delivery-semantics",
+              "spec/storage-interface",
+              "spec/threat-model",
               "spec/crypto-interface",
               "spec/adapter-contract"
             ]
@@ -129,7 +133,8 @@
               "research/03-neural-network-base-layer",
               "research/04-network-transport-ipv6",
               "research/05-twelve-principles",
-              "research/06-first-steps"
+              "research/06-first-steps",
+              "research/07-prior-art"
             ]
           }
         ]

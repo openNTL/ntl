@@ -1,0 +1,218 @@
+---
+title: "Delivery Semantics"
+description: "Delivery classes, receipts, retry, and idempotency"
+"og:title": "Delivery Semantics — NTL Specification"
+"og:description": "NTL delivery classes: best-effort and acknowledged at-least-once delivery with receipts, retry policy, and idempotency via signal ID."
+"twitter:title": "NTL Delivery Semantics Spec"
+---
+**Version:** 0.2.0-draft
+
+## Overview
+
+Until this version NTL offered exactly one delivery behaviour: emit and
+hope. A signal below `min_propagation_weight` was silently absorbed, and the
+sender was never told. That is defensible for analytics and discovery. It is
+**disqualifying** for anything transactional — no one will settle a payment
+on a protocol where the failure mode is silence.
+
+This document defines two delivery classes so that both use cases are
+served, and so that an application can tell which one it is getting.
+
+## Delivery Classes
+
+Every signal carries exactly one delivery class. It is part of the signed
+signal body, so an intermediate node cannot downgrade it.
+
+| Class | Guarantee | Failure is | Use for |
+|---|---|---|---|
+| `best-effort` | None. May be silently absorbed. | Invisible | Analytics, discovery, heartbeats, telemetry |
+| `acknowledged` | At-least-once, or the sender learns it failed | **Always reported** | Orders, payments, commands, anything with a side effect |
+
+`best-effort` MUST be the default, so that existing behaviour is unchanged
+and the expensive class is opt-in.
+
+```
+Signal {
+    ...
+    delivery: "best-effort" | "acknowledged",   // default: best-effort
+}
+```
+
+## 1. Best-Effort Delivery
+
+Current behaviour, now named. A node MAY drop a `best-effort` signal when:
+
+- weight falls below `min_propagation_weight` after attenuation
+- TTL reaches zero
+- no candidate synapse passes scope filtering
+- the activation queue is full and this signal is the lowest-weight occupant
+
+No receipt is emitted and no error is returned. The sender cannot distinguish
+delivery from absorption, and MUST NOT be written as though it can.
+
+## 2. Acknowledged Delivery
+
+### 2.1 The Guarantee
+
+For an `acknowledged` signal, the sender MUST eventually observe exactly one
+of:
+
+1. **A positive receipt** — a node handled the signal.
+2. **A negative receipt** — a node determined it cannot be delivered, with a
+   reason.
+3. **A timeout** — no receipt within the retry budget.
+
+There is no fourth outcome. **Silence is not a permitted result.** This is
+the whole substance of the class.
+
+### 2.2 Silent Absorption Is Prohibited
+
+A node that would drop an `acknowledged` signal MUST instead emit a negative
+receipt toward `signal.origin`, with a reason:
+
+| Reason | Condition |
+|---|---|
+| `below_threshold` | Weight fell below `min_propagation_weight` |
+| `ttl_exhausted` | TTL reached zero at a node that cannot handle it |
+| `no_route` | No candidate synapse passed scope filtering |
+| `queue_full` | Activation queue full and overflow policy selected this signal |
+| `unsupported_type` | Node cannot handle the type and cannot forward it |
+| `refused` | Policy declined the signal |
+
+In particular, **`min_propagation_weight` MUST NOT silently absorb an
+`acknowledged` signal.** This is the single most important rule in this
+document: it is what makes the class usable, and the exception that the
+weight threshold now carries.
+
+A node that cannot emit a negative receipt — no return path — MUST NOT
+silently drop the signal. It MUST attempt to return it along the recorded
+trace, and if that fails, log the drop as an error condition. Applications
+then fall back on sender-side timeout.
+
+### 2.3 Attenuation Floor
+
+An `acknowledged` signal's weight MUST NOT be attenuated below
+`min_propagation_weight` while TTL remains. A node MUST clamp:
+
+```
+weight' = max(weight · attenuation_factor, min_propagation_weight)
+```
+
+Without this clamp, a long path guarantees a `below_threshold` rejection at
+some hop regardless of routing quality, making the class unusable over more
+than a few hops.
+
+## 3. Retry
+
+The **sender** retries; intermediate nodes do not. Hop-by-hop retry
+multiplies traffic combinatorially and makes idempotency the whole
+network's problem instead of the endpoints'.
+
+Default policy: exponential backoff with full jitter.
+
+```
+attempt n delay  =  random(0, min(base · 2ⁿ, cap))
+```
+
+| Parameter | Default |
+|---|---|
+| `base` | 1 s |
+| `cap` | 30 s |
+| `max_attempts` | 5 |
+| `total_deadline` | 300 s |
+
+Rules:
+
+1. A retry MUST reuse the **same signal ID**. This is what makes the retry
+   recognisable as a duplicate rather than a new request (§4).
+2. A retry MUST NOT reuse the recorded trace: the point of retrying is to
+   let stochastic selection find a different path.
+3. Retrying MUST stop at the first terminal receipt — positive, or negative
+   with a reason other than a transient one. `no_route` and `queue_full` are
+   transient; `unsupported_type` and `refused` are terminal, and retrying
+   them is pure waste.
+4. On exhausting the budget the sender MUST surface a delivery failure to
+   the application. It MUST NOT report success.
+
+## 4. Idempotency
+
+At-least-once means duplicates. Handlers must tolerate them.
+
+**Signal ID is the idempotency key.** A retry carries the same ID as the
+original, so any node — intermediate or terminal — recognises it through the
+deduplication cache.
+
+Requirements:
+
+1. A node MUST deduplicate on signal ID for at least
+   `dedup_cache_seconds` (default 300 s), which MUST be at least the
+   sender's `total_deadline`. A dedup window shorter than the retry budget
+   means a late retry is processed as new — the one configuration that
+   silently breaks exactly-once handling.
+2. A terminal node that receives a duplicate of a signal it already handled
+   MUST NOT handle it again, and MUST re-emit the original receipt. Dropping
+   the duplicate silently strands a sender whose first receipt was lost.
+3. Applications MUST treat handling as idempotent. NTL provides
+   at-least-once; it does not provide exactly-once, and no transport can.
+
+<Warning>
+NTL does not offer exactly-once delivery. An application that requires it
+must make its handler idempotent — keyed on signal ID — and NTL's
+deduplication then makes that practical rather than automatic.
+</Warning>
+
+## 5. Ordering
+
+Neither class provides ordering. Signals may arrive in any order, and
+stochastic path selection makes reordering *likely* rather than merely
+possible.
+
+Applications requiring order MUST sequence at the application layer.
+Signal IDs are ULIDs, so they are lexicographically time-ordered by
+emission and usable as a sequencing hint — but not as a guarantee, since
+clocks across nodes are not synchronised.
+
+## 6. Interaction With Other Mechanisms
+
+| Mechanism | `best-effort` | `acknowledged` |
+|---|---|---|
+| `min_propagation_weight` absorption | Permitted, silent | **Prohibited** — negative receipt required |
+| Attenuation below threshold | Permitted | Clamped (§2.3) |
+| Queue overflow drop | Permitted, silent | Negative receipt required |
+| TTL exhaustion | Silent | Negative receipt required |
+| Activation refractory delay | Permitted | Permitted — delay is not loss |
+| Receipt emission | Optional | REQUIRED |
+| Journal entry | SHOULD | MUST |
+
+Note the last row. Because `acknowledged` signals always resolve to a
+definite outcome, they are the highest-quality training data the routing
+model receives: their rewards are never `pending` for long. A node carrying
+`acknowledged` traffic learns faster and more accurately than one carrying
+only `best-effort` traffic.
+
+## 7. Cost
+
+`acknowledged` is not free. Per signal it adds a return-path receipt,
+sender-side retry state until resolution, a journal entry, and dedup
+retention for the full retry budget.
+
+Applications SHOULD use `best-effort` for anything that can tolerate loss,
+and reserve `acknowledged` for signals with side effects. Marking all
+traffic `acknowledged` roughly doubles signal volume and is the single
+easiest way to make an NTL deployment slow.
+
+## 8. Conformance
+
+An implementation claiming `acknowledged` support MUST:
+
+- Accept and preserve the `delivery` field through propagation, unmodified
+- Emit negative receipts for every condition in §2.2
+- Clamp attenuation per §2.3
+- Deduplicate on signal ID for at least the sender's `total_deadline`
+- Re-emit the original receipt for a duplicate of an already-handled signal
+- Never report success on an unresolved signal
+
+An implementation supporting only `best-effort` MUST reject `acknowledged`
+signals with a negative receipt of reason `unsupported_type`, rather than
+accepting them and degrading silently. A silent downgrade is worse than a
+refusal, because the sender believes it has a guarantee it does not have.

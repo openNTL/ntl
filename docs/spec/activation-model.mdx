@@ -5,7 +5,7 @@ description: "Specification for threshold-based signal processing"
 "og:description": "Formal specification for threshold-based signal processing and activation functions in NTL nodes."
 "twitter:title": "NTL Activation Model Spec"
 ---
-**Version:** 0.1.0-draft
+**Version:** 0.2.0-draft
 
 ## Overview
 
@@ -26,16 +26,49 @@ ActivationState {
 
 ## Activation Sequence
 
-1. Signal arrives at node via synapse
-2. Signal contribution is calculated: `contribution = signal.weight * synapse.weight`
-3. Contribution is added to node's potential: `potential += contribution`
-4. If `potential >= threshold` AND node is not in refractory period:
-   a. Node fires (processes the signal)
-   b. Potential resets to 0.0
-   c. Node enters refractory period
-5. If potential < threshold OR node is in refractory:
-   a. Signal is queued for accumulation
-   b. No processing occurs
+1. Signal arrives at node via synapse.
+2. Signal contribution is calculated:
+   `contribution = signal.weight * synapse.weight`
+3. Contribution is added to the node's potential:
+   `potential += min(potential + contribution, max_potential)`
+4. The signal is appended to the **pending queue** (see
+   [Queue Management](#queue-management)).
+5. If `potential >= threshold` AND the node is not in its refractory period:
+   a. The node **fires**, draining a batch from the queue
+      ([What Firing Processes](#what-firing-processes)).
+   b. Potential resets to `0.0`.
+   c. The node enters its refractory period.
+6. Otherwise no processing occurs; the signal waits in the queue.
+
+## What Firing Processes
+
+Earlier drafts said potential accumulates across all signals and then "the
+node fires (processes the signal)", without saying **which** signal. When
+potential is the sum of many contributions, "the signal" is ambiguous, and
+implementations diverged: some processed only the signal that crossed the
+threshold, leaking the rest.
+
+This version resolves it. On firing, a node MUST **drain a batch** from the
+pending queue:
+
+1. Order the pending queue by signal weight descending. Where weights tie,
+   order by signal ID ascending, so the order is total and reproducible.
+2. Process up to `fire_batch_size` signals from the front of that order.
+3. Reset `potential` to `0.0` **after** the batch, not per signal.
+4. Enter the refractory period.
+
+Signals left in the queue remain queued and are eligible for the next fire.
+They MUST NOT be discarded merely because they were not in this batch.
+
+`fire_batch_size` defaults to `16`. A node MUST NOT set it to zero. Setting
+it to `1` yields the strictest interpretation of the earlier text — one
+signal per fire — at the cost of throughput, and is permitted.
+
+<Note>
+Potential resets once per fire, not once per signal. A batch of sixteen
+signals costs the same one refractory period as a batch of one, which is
+what makes batching worth doing under load.
+</Note>
 
 ## Dynamic Threshold
 
@@ -51,11 +84,84 @@ This ensures that overloaded nodes become more selective, providing natural back
 
 ## Refractory Period
 
-After firing, a node MUST enter a refractory period during which it cannot fire again. The RECOMMENDED default is 10 milliseconds. During the refractory period:
+After firing, a node MUST enter a refractory period during which it cannot
+fire again. During it:
 
 - Incoming signals still accumulate potential
 - No processing occurs
-- No signals are dropped (they queue)
+- Signals queue, subject to the bounded-queue policy below
+
+### Refractory Period Is a Node-Class Parameter
+
+A single global default cannot serve both a solar-powered sensor and a
+datacentre node. 10 ms on server-class hardware caps the node at 100 fires
+per second, which is a throughput ceiling far below what the hardware can
+sustain — and a self-inflicted one.
+
+The refractory period MUST therefore be configured per node class:
+
+| Node class | Default `refractory_period_ms` | Rationale |
+|---|---|---|
+| `edge` | `10` | Protects a battery- and CPU-constrained device; 100 fires/s is ample |
+| `standard` | `1` | Balanced default for a general-purpose node |
+| `server` | `0` | No artificial ceiling; backpressure comes from the dynamic threshold |
+| `infrastructure` | `0` | As `server`, with a larger queue |
+
+A value of `0` disables the refractory period. This is legitimate on
+server-class nodes: the dynamic threshold and the bounded queue already
+provide backpressure, and the refractory period is the crudest of the three.
+
+A node MUST report its class and effective refractory period, so that an
+operator diagnosing a throughput ceiling can see it.
+
+## Queue Management
+
+`load_factor = current_queue_depth / max_queue_depth` implies a **bounded**
+queue. Earlier drafts also stated that during the refractory period "no
+signals are dropped (they queue)". Both cannot hold: a bounded queue
+necessarily rejects something once full. This version specifies what.
+
+### Bounded Queue
+
+A node MUST maintain a bounded pending queue of `max_queue_depth` signals
+(defaults in [Configuration](#configuration)). `load_factor` is defined
+against this bound, and is therefore always in `[0, 1]`.
+
+### Overflow Policy
+
+When a signal arrives at a full queue, the node MUST apply its configured
+`overflow_policy`:
+
+| Policy | Behaviour |
+|---|---|
+| `drop_lowest_weight` (default) | Compare the arriving signal against the lowest-weight queued signal. The lower-weight of the two is dropped. Ties drop the arriving signal. |
+| `drop_newest` | Drop the arriving signal. |
+| `drop_oldest` | Drop the oldest queued signal, admit the arriving one. |
+
+`drop_lowest_weight` is the default because it preserves the protocol's own
+priority semantics: weight already means importance everywhere else, and
+under load is exactly when honouring it matters.
+
+### Overflow and Delivery Class
+
+A dropped signal's delivery class governs whether the drop is reported:
+
+- `best-effort` — dropped silently. No receipt.
+- `acknowledged` — the node MUST emit a negative receipt with reason
+  `queue_full` toward the signal's origin. Dropping it silently is
+  prohibited; see [delivery-semantics](/spec/delivery-semantics) §2.2.
+
+A node MUST NOT drop an `acknowledged` signal without emitting a receipt,
+even under overflow. Overload is not an exemption from the delivery
+guarantee — it is the case the guarantee exists for.
+
+### Interaction With the Dynamic Threshold
+
+Overflow should be rare, because the rising threshold throttles admission
+before the queue fills. A node whose queue overflows regularly is
+misconfigured: either `max_queue_depth` is too small for its traffic, or
+`dynamic_threshold` is disabled. Implementations SHOULD expose an overflow
+counter so this is visible rather than inferred.
 
 ## Activation Functions
 
@@ -69,11 +175,39 @@ Implementations MUST support the `step` activation function. Implementations SHO
 
 ## Configuration
 
-```
+```toml
 [activation]
-base_threshold = 0.5          # REQUIRED
+node_class = "edge"            # REQUIRED — edge | standard | server
+                               #   | infrastructure
+base_threshold = 0.5           # REQUIRED
 activation_function = "step"   # REQUIRED
-refractory_period_ms = 10     # REQUIRED
+refractory_period_ms = 10      # REQUIRED — defaults per node_class
 max_potential = 10.0           # RECOMMENDED
 dynamic_threshold = true       # RECOMMENDED
+fire_batch_size = 16           # REQUIRED — MUST be >= 1
+max_queue_depth = 1024         # REQUIRED
+overflow_policy = "drop_lowest_weight"   # REQUIRED
 ```
+
+Defaults by node class:
+
+| Parameter | `edge` | `standard` | `server` | `infrastructure` |
+|---|---|---|---|---|
+| `refractory_period_ms` | `10` | `1` | `0` | `0` |
+| `fire_batch_size` | `8` | `16` | `64` | `128` |
+| `max_queue_depth` | `256` | `1024` | `8192` | `32768` |
+| `max_potential` | `10.0` | `10.0` | `50.0` | `100.0` |
+
+## Persistence
+
+Activation state MAY be memory-only on edge nodes, and SHOULD be persisted
+on other classes. A node that discards its activation state on restart
+offers an attacker a free reset of backpressure: flood it, let it restart,
+and it comes back ready to be flooded again. See
+[storage-interface](/spec/storage-interface) §4.
+
+## Related
+
+- [delivery-semantics](/spec/delivery-semantics) — what overflow owes the sender
+- [learning-model](/spec/learning-model) — how outcomes update weights
+- [threat-model](/spec/threat-model) §5 — resource exhaustion
