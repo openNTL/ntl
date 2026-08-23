@@ -1,0 +1,235 @@
+---
+title: "Postgres MCP Server"
+description: "Operate an openNTL node from an agent — and a template you can copy"
+"og:title": "Postgres MCP Server — openNTL"
+"og:description": "An MCP server for a PostgreSQL-backed openNTL node, running on Cloudflare Workers. Also a copyable template for building your own database MCP server."
+"twitter:title": "openNTL Postgres MCP Server"
+---
+
+openNTL ships an MCP server that lets an agent inspect and operate a
+PostgreSQL-backed node: what it has learned, whether it is still learning, and
+what its database looks like.
+
+It has a second purpose. **It is a template.** If you want a Postgres MCP
+server for your own schema, copy it — the auth, read-only enforcement, output
+bounding and test harness are the parts that take longest to get right, and
+they are the parts that carry over unchanged.
+
+Source: [`mcp/ntl-postgres-mcp-server`](https://github.com/openNTL/ntl/tree/main/mcp/ntl-postgres-mcp-server).
+Its tool surface follows the shape of the Supabase MCP server, so an agent
+familiar with one is immediately productive with the other.
+
+## What an agent can do with it
+
+```
+> Is this node still learning?
+
+  ntl_get_learning_health →
+    decisions sampled: 1000
+    delivered: 71%   exploratory: 8%   pending: 4%
+    No warnings. The model is receiving outcomes and still exploring.
+
+> Which peers are best for Query signals?
+
+  ntl_list_synapses(signal_type: "Query") →
+    peer          weight   decayed   affinity
+    3f2a1b…       0.8100   0.7994    Query:412 Data:31
+    9c4e77…       0.4400   0.2103    Query:88  Data:210
+```
+
+The second row is worth noticing: a stored weight of `0.44` but a decayed
+weight of `0.21`. Decay is applied lazily, so an operator comparing the stored
+value against a live routing decision would be comparing the wrong number.
+The tool shows both.
+
+## Tools
+
+Read-only, always available:
+
+| Tool | Answers |
+|---|---|
+| `ntl_list_synapses` | What has the node learned? |
+| `ntl_get_learning_health` | Is it still learning? |
+| `ntl_list_journal` | Which routing decisions were made, and how did they turn out? |
+| `ntl_get_node_status` | Identity, topology, activation, dedup |
+| `ntl_list_tables` | Tables, row estimates, sizes, columns |
+| `ntl_list_extensions` | Installed and available extensions |
+| `ntl_list_migrations` | What has been applied |
+| `ntl_generate_typescript_types` | TypeScript interfaces for the live schema |
+| `ntl_execute_sql` | Arbitrary SQL, read-only by default |
+| `ntl_get_advisors` | Security and performance lint, with remediations |
+| `ntl_get_activity` | Live connections and slowest statements |
+| `ntl_search_docs` | openNTL docs, indexed offline |
+
+Write tools appear only when an operator enables them:
+
+| Tool | Does |
+|---|---|
+| `ntl_apply_migration` | Applies DDL in one transaction, records it in a ledger |
+| `ntl_init_schema` | Creates the openNTL schema. Idempotent. |
+
+## The safety model
+
+This is the part worth understanding before you deploy it — or copy it.
+
+### Read-only is enforced by Postgres, not by parsing SQL
+
+The tempting approach is to inspect the query and reject anything that looks
+like a write. Every implementation that does this can be talked around:
+
+```sql
+WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x;   -- no leading DELETE
+SELECT my_function_that_writes();                        -- writes in a function
+/* SELECT */ INSERT INTO t VALUES (1);                   -- comment-prefixed
+SELECT * INTO new_table FROM t;                          -- a SELECT that creates
+```
+
+A blocklist has to anticipate all of it, and SQL is not a regular language.
+Postgres already knows which statements write, so read-only tools run inside
+`BEGIN TRANSACTION READ ONLY` and the **database** rejects the write with
+SQLSTATE 25006.
+
+The test suite fires sixteen real bypasses at it and then asserts the data is
+untouched — not merely that an error was returned.
+
+<Warning>
+If you copy this to a database with no equivalent of
+`SET TRANSACTION READ ONLY`, you do not have a read-only mode. Say so, rather
+than falling back to SQL parsing and implying a guarantee you cannot keep.
+</Warning>
+
+### Writes are off by default, and absent rather than refusing
+
+`ALLOW_WRITES` defaults to `false`. When it is off, write tools are **not
+registered at all** — they do not appear in the tool list. Offering a tool that
+can only fail wastes an agent's turn and teaches it nothing.
+
+Enabling writes is per-environment, so it is a deliberate act against a named
+target rather than a variable flip on production.
+
+### Auth is required
+
+With `MCP_AUTH_TOKEN` unset, the server returns 500 to every request rather
+than serving unauthenticated. A server holding database credentials with no auth
+is an open SQL console on the public internet. Token comparison is timing-safe.
+
+### Output is bounded, and says when it was cut
+
+A tool returning a million rows does not help an agent — it exhausts the
+context the agent needs to reason with. Output is capped, and truncation is
+reported explicitly. Silent truncation is the worse failure: an agent that
+believes it saw a whole table will draw conclusions from a fragment.
+
+## Deploying
+
+```bash
+cd mcp/ntl-postgres-mcp-server
+npm install
+
+# Hyperdrive pools connections outside the isolate
+wrangler hyperdrive create ntl-postgres \
+  --connection-string="postgres://user:pass@host/db"
+# paste the id into wrangler.toml
+
+openssl rand -hex 32 | wrangler secret put MCP_AUTH_TOKEN
+wrangler deploy
+```
+
+Connect a client:
+
+```json
+{
+  "mcpServers": {
+    "ntl-postgres": {
+      "url": "https://ntl-postgres-mcp-server.<subdomain>.workers.dev/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+<Note>
+**Hyperdrive is not optional in production.** Without pooling, every Worker
+invocation opens its own Postgres connection, and a traffic burst exhausts
+`max_connections` long before it exhausts anything else — a failure that looks
+like a database outage rather than a capacity problem. `DATABASE_URL` is for
+local development.
+</Note>
+
+## Creating the schema
+
+The server can create the openNTL Postgres schema itself:
+
+```
+> Set up the openNTL schema
+
+  ntl_init_schema(confirm: true) →
+    openNTL schema created in `ntl`.
+    Tables (10): activation, influence, journal, meta, migrations,
+                 peers, schema_version, seen_signals, signal_history, synapses
+```
+
+That schema is also the **reference DDL** for the Rust `ntl-store-postgres`
+backend, and is exposed as an MCP resource at `ntl://schema/postgres` so an
+agent about to write a migration can read it first. See
+[storage backends](/guides/storage-backends#postgresql).
+
+## Copying it as a template
+
+```bash
+cp -r mcp/ntl-postgres-mcp-server my-mcp-server
+```
+
+Three files change; the rest carries over.
+
+| Change | Why |
+|---|---|
+| `src/db.ts` | Implement `SqlExecutor` for your driver — four methods |
+| `src/tools/ntl.ts` | Replace with your domain tools |
+| `wrangler.toml` | Swap the Hyperdrive binding |
+
+Portable as-is: the safety layer, formatting and truncation, the Worker entry
+point with auth, the schema and SQL tools, and the whole test harness.
+
+### Testing without a database service
+
+Tests run against [PGlite](https://pglite.dev) — real Postgres compiled to
+WebAssembly, in-process — so CI needs no database. Set `TEST_DATABASE_URL` and
+the same suite also runs against a live server.
+
+Running both is not belt-and-braces. It caught two real bugs:
+
+- **Multi-statement SQL.** Parameterised statements use the extended protocol,
+  which accepts exactly one command. Schema creation failed with SQLSTATE 42601
+  on a script that worked as separate statements.
+- **BIGINT type instability.** postgres.js returns BIGINT as a string, PGlite
+  as a number, so a tool's structured output changed type depending on the
+  driver. Now normalised to a string — correct regardless, since BIGINT exceeds
+  `Number.MAX_SAFE_INTEGER` and openNTL stores nanosecond timestamps in it.
+
+Neither was visible to a single-backend suite.
+
+<Warning>
+If you port this to MySQL, note that `ntl_apply_migration` assumes
+**transactional DDL** — every statement in one transaction, rolling back
+together. MySQL has no such guarantee, and a migration that half-applies
+leaves a schema no version number describes. Apply one statement per migration
+there, or state plainly that rollback is not guaranteed.
+</Warning>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Storage Backends" icon="database" href="/guides/storage-backends">
+    The multi-database matrix, including the PostgreSQL backend
+  </Card>
+  <Card title="Storage Interface" icon="file-contract" href="/spec/storage-interface">
+    The normative contract every backend satisfies
+  </Card>
+  <Card title="Learning Model" icon="brain" href="/spec/learning-model">
+    What the health tool's ratios actually mean
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/guides/quickstart">
+    Get a node running first
+  </Card>
+</CardGroup>

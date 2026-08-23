@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-adapter-legacy"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "serde",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-adapter-web2"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "serde",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-adapter-web3"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "serde",
@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-benchmarks"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "criterion",
  "ntl-core",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-cli"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "clap",
  "colored",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-core"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "aes-gcm",
  "blake3",
@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-edge"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "ntl-net",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-example-two-node-learning"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "ntl-net",
@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-net"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "ntl-store-postgres",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "ntl-node"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "ntl-net",
@@ -962,14 +962,14 @@ dependencies = [
 
 [[package]]
 name = "ntl-store-postgres"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
 ]
 
 [[package]]
 name = "ntl-store-sqlite"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "ntl-core",
  "rusqlite",

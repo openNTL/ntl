@@ -54,7 +54,8 @@
               "guides/quickstart",
               "guides/first-signal",
               "guides/building-adapters",
-              "guides/storage-backends"
+              "guides/storage-backends",
+              "guides/postgres-mcp"
             ]
           },
           {

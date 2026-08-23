@@ -1,48 +1,79 @@
 ---
 title: "Storage Backends"
-description: "Choosing and configuring an NTL storage backend"
+description: "NTL runs on the database you already have"
 "og:title": "Storage Backends — NTL"
-"og:description": "NTL runs on the databases you already trust. Configure SQLite, PostgreSQL, graph, or KV storage backends for your NTL node."
+"og:description": "NTL is multi-database by design. Run it on SQLite, PostgreSQL, a graph database, a KV store, or SiafuDB — all through one interface."
 "twitter:title": "NTL Storage Backends"
 ---
 
-NTL does not ship a database. It specifies what a node must remember and
-leaves where to a backend you choose.
+**NTL is multi-database by design.** It does not ship a database and does not
+privilege one. It specifies *what a node must remember* and leaves *where* to
+a backend you choose.
 
-**NTL runs on the databases you already trust.** If you operate PostgreSQL,
-point NTL at it. If you are deploying to a phone or a sensor, SQLite needs no
-configuration at all.
+If you run PostgreSQL, point NTL at it. If you are deploying to a phone,
+SQLite needs no configuration. If your data is already a graph, use a graph
+database and let the storage graph and the synapse topology be the same
+graph.
 
 <Note>
 The contract every backend satisfies is
-[spec/storage-interface](/spec/storage-interface). The Rust expression of it
-is the `NodeStore` trait in
+[spec/storage-interface](/spec/storage-interface). Its Rust expression is the
+`NodeStore` trait in
 [`ntl-core`](https://github.com/openNTL/ntl/blob/main/runtime/ntl-core/src/store/mod.rs).
+Any database that satisfies it is a conforming backend — including one you
+write yourself.
 </Note>
 
-## Choosing a Backend
+## The Matrix
 
-| Backend | Best for | Durability | Status |
-|---|---|---|---|
-| **SQLite** | Edge nodes, single-machine full nodes | Survives power loss (WAL) | Shipping — the default |
-| **PostgreSQL** | Full nodes in existing Postgres estates | Survives power loss | Planned |
-| **In-memory** | Tests, `--dev`, ephemeral nodes | None | Shipping |
-| **Graph databases** | Deployments where topology *is* the data | Backend-dependent | Via the trait |
-| **KV stores** | Dedup cache and hot state offload | Backend-dependent | Via the trait |
+| Backend | Family | Best for | Durability | Status |
+|---|---|---|---|---|
+| [SQLite](#sqlite) | Embedded relational | Edge nodes, single-machine full nodes | Power-loss safe (WAL) | **Shipping** |
+| [PostgreSQL](#postgresql) | Server relational | Full nodes in an existing Postgres estate | Power-loss safe | Schema + MCP server shipping; Rust backend in progress |
+| [In-memory](#in-memory) | Ephemeral | Tests, `--dev`, disposable nodes | None | **Shipping** |
+| [SiafuDB](#siafudb) | Embedded property graph | Offline-first device and Web3 deployments | Backend-dependent | Planned |
+| [SiafuDB-Kuzu](#siafudb-kuzu) | Columnar graph (C++) | Analytical queries over topology, vector search | Backend-dependent | Planned |
+| [Neo4j / Memgraph](#other-graph-databases) | Server graph | Existing graph estates | Backend-dependent | Community |
+| [Redis / Valkey](#kv-stores) | KV | Dedup cache and hot-state offload | Configurable | Community |
+| [Your own](#writing-a-backend) | — | Whatever you already run | Yours to state | Implement the trait |
 
-If you are unsure, use SQLite. It handles both edge and full-node
-deployments, and moving later is a configuration change plus a migration,
-not a rewrite.
+"Community" means the trait is sufficient and nobody has published one yet.
 
-## SQLite (Default)
+<Note>
+**Choosing, briefly.** Not sure? Use SQLite — it handles both edge and
+full-node deployments, and moving later is a config change plus a migration,
+not a rewrite. Already run Postgres and want NTL state under the same backup
+and access control? Use PostgreSQL. Is your domain data already a graph?
+A graph backend lets topology queries be traversals instead of joins.
+</Note>
 
-Zero configuration. `ntl init` creates the database and applies migrations
-on first run.
+## What Every Backend Must Store
+
+Six categories, regardless of family. This is the part that makes the
+interface portable:
+
+| State | Why it cannot be lost |
+|---|---|
+| Synapse weights and type affinity | This *is* the learned model |
+| Topology knowledge, with provenance | Provenance is what blocks eclipse attacks |
+| Deduplication cache | Loop prevention depends on it |
+| Activation snapshot | Otherwise a restart resets backpressure |
+| Learning journal | The training data |
+| Influence accounting | Otherwise a forced restart resets an attacker's budget |
+
+Signal bodies are **optional** and off by default. See
+[spec/storage-interface](/spec/storage-interface) for which of these may be
+memory-only per deployment class.
+
+## SQLite
+
+Zero configuration. `ntl init` creates the database and applies migrations on
+first run.
 
 ```toml
 [storage]
 backend = "sqlite"
-path = "~/.ntl/node.db"      # a single file
+path = "~/.ntl/node.db"
 ```
 
 Full options:
@@ -51,22 +82,20 @@ Full options:
 [storage]
 backend = "sqlite"
 path = "~/.ntl/node.db"
-journal_mode = "wal"          # default; keeps readers unblocked by writers
+journal_mode = "wal"          # keeps readers unblocked by writers
 synchronous = "normal"        # normal | full | off
 busy_timeout_ms = 5000
-retain_signal_history = false # default off — payloads are sensitive
+retain_signal_history = false # off by default — payloads are sensitive
 ```
 
-### Why SQLite Is the Edge Story
+A single file with no server is exactly what a constrained device needs. WAL
+mode lets the propagation path read synapse weights while the learning loop
+writes them, without either blocking the other.
 
-A single file with no server, no socket, and no configuration is exactly what
-a constrained device needs. WAL mode lets the propagation path read synapse
-weights while the learning loop writes them, without either blocking the
-other.
-
-On flash-backed devices, `synchronous = "normal"` trades a narrow
-power-loss window for materially fewer write cycles. Use `full` where power
-loss is likely and the hardware can take the wear.
+On flash-backed devices `synchronous = "normal"` trades a narrow power-loss
+window for materially fewer write cycles. Use `full` where power loss is
+likely and the hardware can take the wear — and note that only `full` lets
+the backend honestly report `Durable`.
 
 <Warning>
 Do not put the database on a network filesystem. SQLite's locking is
@@ -76,30 +105,32 @@ an error.
 
 ## PostgreSQL
 
-For operators who already run PostgreSQL and want NTL state alongside
-everything else — shared backup, monitoring, and access control.
+For operators who already run PostgreSQL and want NTL state where their
+backups, monitoring, and access control already reach. That is the case for
+it — an operational convenience, not a performance argument. SQLite is faster
+for a single node.
 
 ```toml
 [storage]
 backend = "postgres"
 url = "postgres://ntl@localhost/ntl"
-max_connections = 16
 schema = "ntl"                # keeps NTL tables out of `public`
+max_connections = 16
 ```
 
-<Note>
-**Status: planned.** The trait and configuration surface are defined and the
-crate is stubbed; the implementation is not complete. Use SQLite today.
-</Note>
+**What ships today:** the schema, the migrations, and a full
+[MCP server](/guides/postgres-mcp) that creates and inspects it. That means
+you can stand up an NTL Postgres store and query it from an agent right now.
+The Rust `NodeStore` implementation is the remaining piece; use SQLite for a
+running node until it lands.
 
 Because `NodeStore` is synchronous while Postgres drivers are asynchronous,
-`ntl-store-postgres` wraps its calls in a blocking pool at the crate
-boundary. That choice keeps `ntl-core` free of an async runtime — see
-[storage-interface](/spec/storage-interface) for the reasoning.
+`ntl-store-postgres` wraps its calls in a blocking pool at its own crate
+boundary. That keeps `ntl-core` free of an async runtime — see
+[spec/storage-interface](/spec/storage-interface) for the reasoning, and the
+crate's own docs for the two traps in that pattern.
 
 ## In-Memory
-
-For tests and ephemeral nodes.
 
 ```toml
 [storage]
@@ -108,47 +139,29 @@ backend = "memory"
 
 `MemoryStore` in `ntl-core` is the **reference implementation** — the
 semantics every other backend is checked against. Nothing survives process
-exit, so a node using it re-bootstraps from its configured peers and relearns
-its weights from scratch.
+exit, so a node re-bootstraps from its configured peers and relearns its
+weights.
 
-## Graph Databases
+## Graph Backends
 
-A node's synapse topology is a weighted graph, so a graph-native backend can
-store it as one — making queries like "which paths within three hops have
-carried `Query` signals successfully" a native traversal rather than a join.
-
-Any graph database can back NTL by implementing `NodeStore`: Neo4j,
-Memgraph, or a graph layer of your own. Nothing in the protocol privileges
-one.
+A node's synapse topology is a weighted, directed graph. A graph-native
+backend can store it as one, which turns questions like *"which paths within
+three hops have carried `Query` signals successfully"* into a native
+traversal rather than a recursive join.
 
 Where the backend supports it, the storage graph and the synapse topology can
-be *the same graph*: signals deposit state as they propagate, and state
-changes emit signals. This is a capability of such backends, not an
+be **the same graph**: signals deposit state as they propagate, and state
+changes emit signals. That is a capability such backends offer, not an
 assumption NTL makes.
 
-## KV Stores
+### SiafuDB
 
-The deduplication cache is the one piece of node state that is naturally a
-TTL-keyed KV workload, and Redis-style stores do it better than a relational
-table.
+[SiafuDB](https://siafudb.org) is an embedded property graph database for
+device, edge, and Web3 environments, with an offline-first design. Like NTL
+it is a project of [The Bundu Foundation](https://www.bundu.org).
 
-A backend MAY serve the dedup cache from a KV store while keeping synapse
-and journal state elsewhere — but the atomic check-and-set requirement in
-[storage-interface](/spec/storage-interface) §3 still applies. Redis `SET
-key NX EX` satisfies it; a `GET` followed by a `SET` does not, and the race
-it admits is duplicate propagation.
-
-## SiafuDB
-
-[SiafuDB](https://siafudb.org) is a swarm-based graph database, also
-stewarded by The Bundu Foundation. It is **one ecosystem backend among
-several**, not a dependency of NTL, and NTL does not require it.
-
-Its Graph Sync Protocol is a natural fit for NTL's learning loop: sync
-acknowledgements are exactly the delivery outcomes the routing model trains
-on. That makes it a good worked example of the general pattern described in
-[research/02](/research/02-machine-learning-principles) — not a special
-case the protocol accommodates.
+It is **one backend option among several**, not a dependency. NTL's roadmap
+does not wait on it, and nothing in the protocol privileges it.
 
 ```toml
 [storage]
@@ -156,10 +169,66 @@ backend = "siafu"
 endpoint = "siafu://localhost:7700"
 ```
 
+Its offline-first design lines up well with NTL's intermittent-connectivity
+target: both assume disconnection is normal rather than exceptional. Its sync
+acknowledgements are also a natural source of the delivery outcomes the
+routing model trains on — a good worked example of the general pattern in
+[research/02](/research/02-machine-learning-principles), rather than a
+special case.
+
 <Note>
 **Status: planned**, behind the `siafu` feature flag. SiafuDB is itself in
-development. NTL's roadmap does not depend on it.
+development.
 </Note>
+
+### SiafuDB-Kuzu
+
+A high-performance C++ graph database with Cypher queries and vector search,
+also a Foundation project. Where SiafuDB targets the device, SiafuDB-Kuzu
+targets analytical work: Cypher over accumulated topology, and vector search
+over signal payload embeddings.
+
+The interesting fit is **offline analysis of a learned network** — asking why
+routing converged the way it did, across a fleet, after the fact.
+
+<Note>
+**Status: planned.**
+</Note>
+
+### Other Graph Databases
+
+Neo4j, Memgraph, or anything else with a driver can back NTL by implementing
+`NodeStore`. Nothing in the protocol privileges one graph database over
+another, and the conformance suite will tell you whether yours is correct.
+
+## KV Stores
+
+The deduplication cache is the one piece of node state that is naturally a
+TTL-keyed KV workload, and Redis-style stores do it better than a relational
+table.
+
+A backend MAY serve the dedup cache from a KV store while keeping synapse and
+journal state elsewhere. The atomic check-and-set requirement in
+[spec/storage-interface](/spec/storage-interface) §3 still applies:
+
+- `SET key value NX EX ttl` satisfies it — one round trip decides presence
+  and inserts.
+- `GET` followed by `SET` does **not**. The race it admits is duplicate
+  propagation, which is the exact failure the rule exists to prevent.
+
+## Mixing Backends
+
+Nothing requires one backend for everything. A plausible full-node split:
+
+| State | Backend | Why |
+|---|---|---|
+| Synapses, topology, journal | PostgreSQL | Durable, queryable, already backed up |
+| Dedup cache | Redis | TTL-native, high churn, cheap to lose |
+| Signal history | Object storage | Large, cold, rarely read |
+
+This is a composition you build by implementing `NodeStore` over the pieces,
+not a configuration NTL ships. If you build one, the conformance suite still
+applies to the composite.
 
 ## Writing a Backend
 
@@ -175,29 +244,29 @@ fn my_backend_conforms() {
 }
 ```
 
-The suite is public API precisely so out-of-tree backends can hold
-themselves to the same semantics as the in-tree ones. It checks the two
-requirements backends most often miss:
+The suite is public API precisely so out-of-tree backends can hold themselves
+to the same semantics as the in-tree ones. It checks the two requirements
+backends most often miss:
 
 1. **Deduplication is one atomic check-and-set.** A read then a write leaves
    a race, and that race is duplicate propagation.
-2. **Outcome resolution is idempotent.** The first receipt wins; a second
-   must not overwrite it. At-least-once delivery makes duplicate receipts
-   routine.
+2. **Outcome resolution is idempotent.** The first receipt wins; a second must
+   not overwrite it. At-least-once delivery makes duplicate receipts routine.
 
-Passing the suite is necessary but not sufficient — the concurrency and
-durability requirements are not fully mechanically checkable. Read
-[spec/storage-interface](/spec/storage-interface) before shipping.
+Passing is necessary but not sufficient — the concurrency and durability
+requirements are not fully mechanically checkable. Read
+[spec/storage-interface](/spec/storage-interface) before shipping, and report
+`durability()` honestly.
 
 ## Migrating Between Backends
 
 There is no migration tool yet. What works today:
 
 1. Stop the node.
-2. Export via the new backend's own tooling, or accept the relearning cost.
+2. Export with the new backend's own tooling, or accept the relearning cost.
 3. Update `[storage]` and restart.
 
 Relearning is survivable but not free: the node keeps its identity and
 configured peers, and reconverges on weights over hours to days depending on
-traffic. Plan a migration for a quiet period, and expect degraded routing
-quality until the model catches up.
+traffic. Plan for a quiet period, and expect degraded routing quality until
+the model catches up.

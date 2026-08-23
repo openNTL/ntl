@@ -3,7 +3,8 @@
 **The Neural Transfer Layer for Modern Compute**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Spec Version](https://img.shields.io/badge/spec-v0.1.0--draft-orange.svg)](https://openntl.org/spec/overview)
+[![Spec Version](https://img.shields.io/badge/spec-v0.2.0--draft-blue.svg)](https://openntl.org/spec/overview)
+[![npm](https://img.shields.io/badge/npm-%40nyuchi%2Fntl--cli-red.svg)](https://www.npmjs.com/package/@nyuchi/ntl-cli)
 
 ---
 
@@ -50,11 +51,19 @@ NTL runs on the databases you already trust. See
 
 ## Quick Start
 
-NTL is not yet published to crates.io. Build the CLI from a clone:
+```bash
+npm install -g @nyuchi/ntl-cli
+```
+
+Or build from source, which always works if you have Rust:
 
 ```bash
-git clone https://github.com/openNTL/ntl && cd ntl
-cargo install --path runtime/ntl-cli
+cargo install --git https://github.com/openNTL/ntl ntl-cli
+```
+
+Then:
+
+```bash
 
 # Initialize a node — creates identity + SQLite store at ~/.ntl
 ntl init
@@ -102,6 +111,10 @@ ntl/
 │   ├── web2/           # HTTP, WebSocket, gRPC, GraphQL
 │   ├── web3/           # EVM chains, DID, tokens
 │   └── legacy/         # REST/SOAP wrapper
+├── mcp/                # MCP servers
+│   └── ntl-postgres-mcp-server/  # Postgres MCP on Workers — also a template
+├── npm/                # npm distribution
+│   └── ntl-cli/        # @nyuchi/ntl-cli
 ├── docs/               # Mintlify documentation source
 │   ├── spec/           # Protocol specification (normative)
 │   └── research/       # Design research and prior art
@@ -115,9 +128,9 @@ is published at [openntl.org/spec/overview](https://openntl.org/spec/overview).
 
 ## Project Status
 
-NTL is in **Phase 1: Reference Implementation**. Phase 0 is complete: the
-specification is at 0.2.0-draft, covering the learning model, threat model,
-delivery semantics, and storage interface.
+NTL is in **beta** (`0.2.0-beta.1`). Phase 0 is complete: the specification is
+at 0.2.0-draft, covering the learning model, threat model, delivery semantics,
+and storage interface.
 
 What runs today: two nodes form a synapse over loopback, exchange signed
 signals, return receipts, and the routing weights change in response. See the
@@ -133,7 +146,13 @@ NTL is built on the Ubuntu philosophy — *"I am because we are."*
 
 ## Built by The Bundu Foundation
 
-NTL is stewarded by [The Bundu Foundation](https://www.bundu.org), an open source foundation building infrastructure for African markets and beyond.
+NTL is a core technical project of [The Bundu Foundation](https://www.bundu.org),
+an open source foundation building infrastructure for African markets and
+beyond. It is listed among the Foundation's projects at
+[bundu.org/projects](https://www.bundu.org/projects/):
+
+> **Neural Transfer Layer (NTL)** — Signal-based data transfer for
+> decentralised networks. Replaces APIs with neural propagation.
 
 | Entity | Role |
 |---|---|
@@ -141,8 +160,21 @@ NTL is stewarded by [The Bundu Foundation](https://www.bundu.org), an open sourc
 | [Nyuchi Web Services](https://nws.nyuchi.com) | Engineering, reference implementation |
 | [Nyuchi Africa](https://www.nyuchi.com) | Core maintainer |
 | [Mukoko Africa](https://mukoko.com) | Core maintainer |
-| [SiafuDB](https://siafudb.org) | Ecosystem graph-storage backend |
-| [Mukoko](https://mukoko.com) | Application platform |
+
+### Sibling Foundation projects
+
+NTL is storage-agnostic and depends on none of these. They are listed because
+several are natural companions, and because the Foundation's projects are
+designed to compose.
+
+| Project | What it is | Relationship to NTL |
+|---|---|---|
+| [SiafuDB](https://siafudb.org) | Embedded property graph database for device, edge, and Web3 environments; offline-first | One storage backend option |
+| SiafuDB-Kuzu | High-performance C++ graph database with Cypher and vector search | One storage backend option |
+| Nyuchi Honeycomb | Decentralized storage network for Web3 pods | Potential transport/storage peer |
+| Harare Metro | Open-source public-transport routing for Harare | Candidate application |
+| Mzizi | Open design system and 3D frontend architecture | Candidate application |
+| [Mukoko](https://mukoko.com) | Application platform | Application built on NTL |
 
 ## License
 

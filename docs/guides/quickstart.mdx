@@ -16,18 +16,24 @@ CLI and API are not yet stable.
 
 ## Prerequisites
 
-- Rust 1.85+ ([install](https://rustup.rs))
+- Node 18+ (for the npm install) **or** Rust 1.85+ ([install](https://rustup.rs))
 - A terminal
 
 ## Install
 
-NTL is not yet published to crates.io. Build from a clone:
+```bash
+npm install -g @nyuchi/ntl-cli
+ntl --version
+```
+
+The CLI is a Rust binary; npm is just the distribution channel, because it is
+the package manager almost everyone already has. The postinstall step downloads
+the binary for your platform and verifies its SHA-256 checksum.
+
+Prefer Rust, or on a platform without a prebuilt binary:
 
 ```bash
-git clone https://github.com/openNTL/ntl && cd ntl
-cargo install --path runtime/ntl-cli
-
-ntl --version
+cargo install --git https://github.com/openNTL/ntl ntl-cli
 ```
 
 ## Initialize a Node
@@ -206,6 +212,7 @@ Being explicit, so you do not go looking:
 | Not yet | Notes |
 |---|---|
 | Public test network | No bootstrap nodes are running. Connect nodes you control. |
+| Rust crates on crates.io | Install via npm or `cargo install --git`. |
 | Post-quantum crypto | The interface is specified and pluggable; the shipping module is Ed25519. See [crypto-interface](/spec/crypto-interface). |
 | QUIC transport | Currently TCP with length-prefixed CBOR frames. |
 | PostgreSQL backend | Trait and config are defined; use SQLite. See [storage backends](/guides/storage-backends). |
