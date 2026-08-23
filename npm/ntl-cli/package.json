@@ -1,5 +1,5 @@
 {
-  "name": "@nyuchi/ntl-cli",
+  "name": "@bundu/ntl-cli",
   "version": "0.2.0-beta.1",
   "description": "openNTL command-line interface \u2014 signal transport that learns its routes",
   "keywords": [

@@ -3,8 +3,8 @@
 **The Neural Transfer Layer for Modern Compute**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Spec Version](https://img.shields.io/badge/spec-v0.2.0--draft-blue.svg)](https://openntl.org/spec/overview)
-[![npm](https://img.shields.io/badge/npm-%40nyuchi%2Fntl--cli-red.svg)](https://www.npmjs.com/package/@nyuchi/ntl-cli)
+[![Spec Version](https://img.shields.io/badge/spec-v0.2.0--beta-blue.svg)](https://openntl.org/spec/overview)
+[![npm](https://img.shields.io/badge/npm-%40bundu%2Fntl--cli-red.svg)](https://www.npmjs.com/package/@bundu/ntl-cli)
 
 ---
 
@@ -52,7 +52,7 @@ NTL runs on the databases you already trust. See
 ## Quick Start
 
 ```bash
-npm install -g @nyuchi/ntl-cli
+npm install -g @bundu/ntl-cli
 ```
 
 Or build from source, which always works if you have Rust:
@@ -114,7 +114,7 @@ ntl/
 ├── mcp/                # MCP servers
 │   └── ntl-postgres-mcp-server/  # Postgres MCP on Workers — also a template
 ├── npm/                # npm distribution
-│   └── ntl-cli/        # @nyuchi/ntl-cli
+│   └── ntl-cli/        # @bundu/ntl-cli
 ├── docs/               # Mintlify documentation source
 │   ├── spec/           # Protocol specification (normative)
 │   └── research/       # Design research and prior art
@@ -129,7 +129,7 @@ is published at [openntl.org/spec/overview](https://openntl.org/spec/overview).
 ## Project Status
 
 NTL is in **beta** (`0.2.0-beta.1`). Phase 0 is complete: the specification is
-at 0.2.0-draft, covering the learning model, threat model, delivery semantics,
+at 0.2.0-beta.1, covering the learning model, threat model, delivery semantics,
 and storage interface.
 
 What runs today: two nodes form a synapse over loopback, exchange signed

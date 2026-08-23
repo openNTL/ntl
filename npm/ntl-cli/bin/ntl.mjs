@@ -24,7 +24,7 @@ if (!existsSync(binary)) {
       "offline install, or a platform without a prebuilt binary.",
       "",
       "Reinstall:",
-      "  npm install --force @nyuchi/ntl-cli",
+      "  npm install --force @bundu/ntl-cli",
       "",
       "Or build from source, which always works if you have Rust:",
       "  cargo install --git https://github.com/openNTL/ntl ntl-cli",

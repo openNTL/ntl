@@ -1,5 +1,5 @@
 {
-  "name": "@nyuchi/ntl-postgres-mcp-server",
+  "name": "@bundu/ntl-postgres-mcp-server",
   "version": "0.2.0-beta.1",
   "description": "MCP server for a PostgreSQL-backed openNTL node \u2014 a copyable template for Postgres MCP servers on Cloudflare Workers",
   "license": "Apache-2.0",

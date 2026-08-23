@@ -111,7 +111,7 @@ test("package metadata is coherent", () => {
     ]).toString(),
   );
 
-  assert.equal(pkg.name, "@nyuchi/ntl-cli");
+  assert.equal(pkg.name, "@bundu/ntl-cli");
   assert.equal(pkg.bin.ntl, "bin/ntl.mjs");
   assert.equal(pkg.license, "Apache-2.0");
   // The published tarball must carry the wrapper and installer, or the package

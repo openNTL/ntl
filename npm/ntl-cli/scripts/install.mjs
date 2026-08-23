@@ -41,7 +41,7 @@ const TARGETS = {
 };
 
 function log(message) {
-  process.stderr.write(`@nyuchi/ntl-cli: ${message}\n`);
+  process.stderr.write(`@bundu/ntl-cli: ${message}\n`);
 }
 
 async function main() {

@@ -6,8 +6,8 @@ mode: "wide"
 "og:description": "The formal specification for the Neural Transfer Layer protocol, covering signals, synapses, propagation, activation, and cryptographic interfaces."
 "twitter:title": "NTL Specification"
 ---
-**Version:** 0.2.0-draft
-**Status:** Working Draft
+**Version:** 0.2.0-beta.1
+**Status:** Beta
 **Authors:** The Bundu Foundation
 **License:** Apache 2.0
 
@@ -17,7 +17,24 @@ The Neural Transfer Layer (NTL) is a neural signal-based data transfer layer for
 
 ## Status of This Document
 
-This is a working draft. The specification is under active development and subject to change. Feedback is welcome via the [GitHub repository](https://github.com/openNTL/ntl).
+**Beta.** Every normative requirement here is implemented and tested in the
+reference implementation, which is what moved this out of draft: a
+specification whose claims nobody has run is a design document, not a spec.
+
+Beta rather than final because interoperability has been demonstrated between
+two instances of one implementation, not between two independent ones. Wire
+formats and normative requirements will not change gratuitously, but a second
+implementation is the thing most likely to find a requirement that is
+ambiguous or unimplementable as written, and that feedback is worth a version
+number.
+
+Where the reference implementation does **not** yet satisfy something this
+specification requires, the gap is stated in the document that requires it
+rather than left for a reader to discover — see
+[crypto-interface](/spec/crypto-interface) on `pq-v1` and
+[threat-model](/spec/threat-model) §8 on verified delivery beyond one hop.
+
+Feedback is welcome via the [GitHub repository](https://github.com/openNTL/ntl).
 
 ## Conventions
 
@@ -60,10 +77,11 @@ The NTL specification is divided into the following documents:
   </Card>
 </CardGroup>
 
-## Changes in 0.2.0-draft
+## Changes in 0.2.0-beta.1
 
 This revision closes the gaps that made the routing claims uncheckable and
-the protocol unusable for transactional traffic.
+the protocol unusable for transactional traffic, and it is the first revision
+whose requirements are all exercised by a running implementation.
 
 | Change | Document |
 |---|---|

@@ -1,10 +1,10 @@
-# @nyuchi/ntl-cli
+# @bundu/ntl-cli
 
 Command-line interface for [openNTL](https://openntl.org) — signal transport
 that learns its routes.
 
 ```bash
-npm install -g @nyuchi/ntl-cli
+npm install -g @bundu/ntl-cli
 
 ntl init
 ntl start --dev
