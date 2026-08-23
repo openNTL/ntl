@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "runtime/ntl-core",
+    "runtime/ntl-store-sqlite",
     "runtime/ntl-cli",
     "runtime/ntl-node",
     "runtime/ntl-edge",
@@ -69,6 +70,7 @@ tempfile = "3"
 
 # Internal
 ntl-core = { path = "runtime/ntl-core" }
+ntl-store-sqlite = { path = "runtime/ntl-store-sqlite" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
