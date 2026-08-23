@@ -40,6 +40,7 @@ pub mod error;
 pub mod node;
 pub mod propagation;
 pub mod signal;
+pub mod store;
 pub mod synapse;
 pub mod testing;
 pub mod topology;
@@ -52,6 +53,7 @@ pub use synapse::{Synapse, SynapseId, SynapseState};
 pub use propagation::PropagationScope;
 pub use activation::ActivationFunction;
 pub use adapter::{Adapter, AdapterHealth};
+pub use store::{NodeStore, StoreError};
 
 /// Result type alias for NTL operations.
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,0 +1,272 @@
+---
+title: "Storage Interface"
+description: "Normative contract for NTL storage backends"
+"og:title": "Storage Interface — NTL Specification"
+"og:description": "What an NTL storage backend must persist, durability expectations per deployment class, and what may be held in memory only."
+"twitter:title": "NTL Storage Interface Spec"
+---
+**Version:** 0.2.0-draft
+
+## Overview
+
+NTL specifies **what a node must remember**, not **where it remembers it**.
+This document is the normative contract between the NTL runtime and a
+storage backend. Any database that satisfies it is a conforming backend.
+
+NTL does not depend on any particular database. The reference implementation
+expresses this contract as the `NodeStore` trait in
+[`ntl-core`](https://github.com/openNTL/ntl/blob/main/runtime/ntl-core/src/store/mod.rs);
+this document and that trait are maintained together, and where they
+disagree the specification takes precedence.
+
+<Note>
+**NTL moves signals; your storage layer remembers them.** The default
+backend is SQLite because it needs no configuration and runs on constrained
+devices. Nothing in the protocol privileges it.
+</Note>
+
+## Deployment Classes
+
+Durability requirements differ by deployment class. A backend declares which
+guarantee it provides; the runtime does not request one.
+
+| Class | Typical backend | Required durability |
+|---|---|---|
+| **Edge node** | SQLite | `best-effort` — MUST survive process restart |
+| **Full node** | PostgreSQL, SQLite | `durable` — MUST survive power loss |
+| **Ephemeral node** | in-memory | `memory` — MAY lose everything on exit |
+
+An implementation MUST report its durability class honestly. Reporting
+`durable` while buffering writes in volatile memory is a conformance
+violation, because operators size their deployments on this promise.
+
+## Persisted State
+
+The runtime persists six categories of state. For each, this section states
+what MUST be retained, and what MAY be dropped.
+
+### 1. Synapses (REQUIRED)
+
+A conforming backend MUST persist, for every synapse:
+
+```
+SynapseRecord {
+    id:                  string,        // synapse identifier
+    peer:                bytes,         // remote node identity
+    weight:              float32,       // learned weight, [0, 1]
+    attenuation_factor:  float32,       // applied to crossing signals
+    state:               enum,          // forming | active | weakening
+                                        //   | dormant | pruned
+    type_affinity:       map<string, uint64>,  // per-type success counts
+    established_at_ns:   uint64,
+    last_active_ns:      uint64,
+    signals_transmitted: uint64,
+    signals_received:    uint64,
+    avg_latency_ns:      uint64,
+    error_rate:          float32,       // [0, 1]
+}
+```
+
+`weight` and `type_affinity` are the learned model. Losing them is not a
+cache miss — it discards everything the node learned. A backend MUST NOT
+treat them as reconstructible.
+
+Listing MUST be ordered by `weight` descending. Where weights tie, the order
+MUST be total and stable (the reference implementation breaks ties on
+synapse identifier) so that routing decisions are reproducible.
+
+### 2. Topology Knowledge (REQUIRED)
+
+```
+PeerRecord {
+    id:               bytes,
+    addresses:        list<string>,
+    region:           string?,      // affinity hint, if advertised
+    advertised_types: list<string>,
+    last_seen_ns:     uint64,
+    source:           enum,         // configured | bootstrap
+                                    //   | discovered | observed
+}
+```
+
+`source` is load-bearing, not informational. Discovery-learned peers MUST
+NOT evict configured or bootstrap peers; see
+[threat-model](/spec/threat-model) on eclipse attacks. A backend MUST
+therefore be able to count peers by `source`.
+
+### 3. Deduplication Cache (REQUIRED)
+
+Propagation Rule 4 (loop prevention) requires that a node recognise a signal
+it has already handled.
+
+A backend MUST provide an **atomic check-and-set**: given a signal
+identifier, record it and report whether it was already present. Two
+concurrent callers MUST NOT both observe "not present". A backend that
+implements this as a separate read then write does not conform — the race
+admits duplicate propagation, which is the exact failure the rule exists to
+prevent.
+
+Entries carry a TTL. Once elapsed, an entry MUST be reported as absent, and
+a later check-and-set on the same identifier MUST behave as a first
+sighting. Reclaiming expired rows MAY be deferred to a purge sweep.
+
+Default retention is **300 seconds**. A node MUST retain entries for at
+least the longest plausible signal lifetime on its network; retaining less
+reopens the loop.
+
+### 4. Activation State (RECOMMENDED)
+
+```
+ActivationSnapshot {
+    potential:           float32,
+    threshold:           float32,
+    refractory_until_ns: uint64,
+    signals_fired:       uint64,
+    taken_at_ns:         uint64,
+}
+```
+
+Activation state MAY be memory-only on edge nodes. Full nodes SHOULD persist
+it: otherwise restarting is a free reset of backpressure, and a node under
+flood comes back ready to be flooded again. Snapshots replace one another —
+a backend MUST NOT accumulate them.
+
+### 5. Learning Journal (REQUIRED for learning nodes)
+
+The journal is the training data. Each entry is one routing decision and its
+observed outcome.
+
+```
+JournalEntry {
+    id:             uint64,      // assigned by the store
+    signal:         bytes,       // signal identifier
+    signal_type:    enum,
+    synapse:        string,
+    peer:           bytes,
+    score:          float32,     // score assigned at decision time
+    explored:       bool,        // exploration vs exploitation
+    decided_at_ns:  uint64,
+    outcome:        enum,        // pending | delivered | rejected
+                                 //   | timed-out | transport-failure
+                                 //   | signature-failure
+    resolved_at_ns: uint64?,
+}
+```
+
+Two requirements are normative:
+
+- **Resolution is idempotent.** The first outcome recorded for an entry
+  wins; a later receipt MUST NOT overwrite it, and MUST NOT be an error.
+  At-least-once delivery ([delivery-semantics](/spec/delivery-semantics))
+  means duplicate receipts are expected, not exceptional.
+- **Pending entries past their deadline MUST be discoverable.** This is how
+  silence becomes a training signal. Without it, a path that never delivers
+  looks identical to one never tried, and the model cannot learn to avoid
+  it.
+
+A node that does not update weights MAY omit the journal, and MUST then
+report that it does not learn.
+
+### 6. Influence Accounting (REQUIRED where learning is enabled)
+
+To bound weight poisoning, a node caps how much any single peer identity can
+move its weights per time window. That accounting MUST live in the store,
+not in memory: an attacker who can force a restart would otherwise reset
+their own budget.
+
+A backend MUST record `(peer, magnitude, timestamp)` and return the total
+for a peer since a given window start. See
+[threat-model](/spec/threat-model).
+
+### Signal History (OPTIONAL)
+
+Retaining signal bodies for replay and debugging is optional and MUST
+default to off. Signal payloads are the most privacy-sensitive data a node
+handles, and edge nodes have no room for them.
+
+A backend that does not retain history MUST refuse the write explicitly. It
+MUST NOT accept and discard: an operator who believes replay is available
+when it is not will discover this during an incident.
+
+## What MAY Be Memory-Only
+
+| State | Edge node | Full node |
+|---|---|---|
+| Synapse weights, affinity | MUST persist | MUST persist |
+| Topology knowledge | MUST persist | MUST persist |
+| Dedup cache | MAY be memory-only | SHOULD persist |
+| Activation snapshot | MAY be memory-only | SHOULD persist |
+| Learning journal | MUST persist if learning | MUST persist if learning |
+| Influence accounting | MUST persist if learning | MUST persist if learning |
+| Signal history | MAY omit | MAY omit |
+
+An edge node MAY hold the dedup cache in memory: losing it on restart
+re-admits duplicates for one TTL window, which is a bounded and acceptable
+cost on a constrained device. Losing synapse weights is not bounded, which
+is why they are unconditionally required.
+
+## Concurrency
+
+Backends are called from the propagation, activation, and learning paths
+concurrently. A conforming backend MUST be safe under concurrent use and
+MUST serialise internally rather than requiring callers to hold a lock.
+
+The reference trait takes `&self` on every method for this reason: the store
+is shared, not owned by one path.
+
+## Synchronous Interface
+
+The reference trait is **synchronous**. `ntl-core` carries no async
+executor, so that it holds no runtime assumptions and builds for
+`wasm32-unknown-unknown`. This matches the backends that matter most for the
+edge case: SQLite's API is blocking, and a constrained node has no thread
+pool to spare.
+
+Backends whose driver is asynchronous SHOULD wrap calls in a blocking pool
+at the crate boundary rather than pushing `async` into the core. This is a
+property of the reference implementation, not of the protocol; a
+reimplementation MAY expose an async interface.
+
+## Failure Handling
+
+A backend reports failure in five categories:
+
+| Condition | Runtime response |
+|---|---|
+| `unavailable` — backend unreachable | Node MUST stop accepting new signals; MUST NOT route on stale state |
+| `migration` — schema migration failed | Node MUST NOT start |
+| `corrupt` — record cannot be decoded | Node SHOULD quarantine the record and continue |
+| `write` — write failed | Node MUST treat the affected learning update as not applied |
+| `unsupported` — optional capability absent | Node MUST proceed without that capability |
+
+A failed weight update MUST NOT be silently dropped: a node whose store is
+rejecting writes is a node that has stopped learning, and it MUST surface
+that rather than appear healthy.
+
+## Migrations
+
+A backend MUST apply schema migrations idempotently, and MUST embed them
+rather than requiring an operator to run a separate tool — zero-config
+startup on an edge device depends on it.
+
+A backend MUST refuse to start against a schema version newer than it
+understands, rather than guessing.
+
+## Conformance
+
+An implementation conforms if it satisfies every MUST in this document. The
+reference implementation ships an executable conformance suite
+(`ntl_core::store::conformance::run_all`) that out-of-tree backends can run
+against themselves. Passing it is necessary but not sufficient: the
+concurrency and durability requirements are not fully mechanically checkable.
+
+## Reference Backends
+
+| Crate | Backend | Status |
+|---|---|---|
+| `ntl-core` (`MemoryStore`) | in-memory | Reference semantics |
+| `ntl-store-sqlite` | SQLite | Default for edge and full nodes |
+| `ntl-store-postgres` | PostgreSQL | Planned |
+
+Graph-native and KV backends implement the same contract; see
+[storage backends](/guides/storage-backends).
