@@ -257,3 +257,139 @@ async fn a_structurally_invalid_signal_is_dropped_even_when_correctly_signed() {
         "a malformed signal must not be handled, saw {seen:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The activation/forwarding seam.
+//
+// The activation gate is a *queue*, so a signal can be admitted on one arrival
+// and released later — in a batch triggered by a different arrival, or by the
+// latency guard. The runtime was written as if the gate only ever returned the
+// arriving signal, which lost everything else it released.
+// ---------------------------------------------------------------------------
+
+/// A node whose gate fires a batch, so several queued signals are released at
+/// once and the arrival is not the only one.
+async fn start_batching_node() -> (Arc<Runtime>, SocketAddr, mpsc::Receiver<Event>) {
+    let store: Arc<dyn NodeStore> = Arc::new(MemoryStore::new());
+    let mut node = NodeConfig::default();
+    // Contribution is signal_weight × synapse_weight, and a fresh synapse
+    // sits at 0.1 — so a 0.15 signal contributes 0.015. Two of them cross
+    // this threshold on the *second* arrival, which is what makes the gate
+    // drain a batch through the arrival path rather than the latency guard.
+    node.activation.base_threshold = 0.025;
+    node.activation.fire_batch_size = 8;
+    // Long enough that the guard cannot be what releases them.
+    node.activation.max_queue_latency_ms = 60_000;
+    node.activation.refractory_period_ms = 0;
+    node.activation.dynamic_threshold = false;
+
+    let (runtime, events) = Runtime::new(
+        store,
+        RuntimeConfig {
+            bind: "127.0.0.1:0".parse().expect("bind address"),
+            bootstrap: Vec::new(),
+            node,
+        },
+    )
+    .expect("runtime");
+    let runtime = Arc::new(runtime);
+    let (addr, _accept) = runtime.listen().await.expect("listen");
+    let _maintenance = runtime.spawn_maintenance();
+    (runtime, addr, events)
+}
+
+#[tokio::test]
+async fn every_signal_a_batch_releases_is_handled_not_only_the_arrival() {
+    let (runtime, addr, mut events) = start_batching_node().await;
+    let mut peer = RawPeer::connect(addr, 5).await;
+    assert_eq!(runtime.wait_for_peers(1, Duration::from_secs(5)).await, 1);
+
+    // Two signals. The first sits below the threshold; the second pushes the
+    // accumulated potential over it, and the gate drains both.
+    let mut sent = Vec::new();
+    for (i, weight) in [0.15_f32, 0.15].into_iter().enumerate() {
+        let mut signal = Signal::data("batch")
+            .with_weight(weight)
+            .with_payload(serde_json::json!({ "n": i }))
+            .build_unsigned(peer.node_id.clone());
+        ntl_core::crypto::sign_signal(&ClassicalModule, &mut signal, &peer.private).expect("sign");
+        peer.send(&signal).await;
+        sent.push(signal.id);
+        // Serialise arrivals so the batch composition is deterministic.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+
+    let seen = drain(&mut events, Duration::from_millis(800)).await;
+    let handled: Vec<_> = seen
+        .iter()
+        .filter_map(|e| match e {
+            Event::Handled { signal } => Some(signal.id),
+            _ => None,
+        })
+        .collect();
+
+    // No Released events: the guard is set to 60s, so anything handled here
+    // came out of the batch the second arrival fired.
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::Released { .. })),
+        "the latency guard must not be what released these, saw {seen:?}"
+    );
+    for id in &sent {
+        assert!(
+            handled.contains(id),
+            "every signal the batch released must be handled, not just the \
+             arrival that triggered it. Missing {id}; handled {handled:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_signal_released_by_the_latency_guard_is_still_forwarded() {
+    // Contribution is signal_weight × synapse_weight, but the threshold is
+    // absolute, so over a fresh synapse (weight 0.1) even a heavy signal never
+    // crosses it and only the latency guard releases it. That path emitted an
+    // event and a positive receipt without forwarding, so a relay node
+    // reported delivery for a signal it then dropped.
+    let (relay, relay_addr, mut events) = start_node().await;
+
+    // Two peers, so the relay has somewhere to forward to that is not where
+    // the signal came from.
+    let mut sender = RawPeer::connect(relay_addr, 6).await;
+    let mut onward = RawPeer::connect(relay_addr, 7).await;
+    assert_eq!(relay.wait_for_peers(2, Duration::from_secs(5)).await, 2);
+
+    let mut signal = Signal::data("relayed-onward")
+        .with_weight(0.9)
+        .build_unsigned(sender.node_id.clone());
+    ntl_core::crypto::sign_signal(&ClassicalModule, &mut signal, &sender.private).expect("sign");
+    sender.send(&signal).await;
+
+    let seen = drain(&mut events, Duration::from_millis(2_000)).await;
+
+    assert!(
+        seen.iter()
+            .any(|e| matches!(e, Event::Released { signal_id, .. } if *signal_id == signal.id)),
+        "the guard should have released it, saw {seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|e| matches!(e, Event::Forwarded { signal_id, peers, .. }
+                if *signal_id == signal.id && *peers > 0)),
+        "a released signal must still be forwarded onward, saw {seen:?}"
+    );
+
+    // And the onward peer really received it, rather than the relay merely
+    // reporting that it had.
+    let received = tokio::time::timeout(
+        Duration::from_secs(2),
+        ntl_net::frame::read_signal(&mut onward.stream),
+    )
+    .await
+    .expect("the onward peer should receive the forwarded signal")
+    .expect("a readable signal");
+    assert_eq!(received.id, signal.id);
+    assert!(
+        received.trace.contains(&relay.identity().node_id),
+        "the relay must appear in the trace of what it forwarded"
+    );
+}

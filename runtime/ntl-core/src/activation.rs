@@ -394,9 +394,27 @@ impl ActivationState {
         let dropped = match self.overflow_policy {
             OverflowPolicy::DropNewest => signal,
             OverflowPolicy::DropOldest => {
-                let evicted = self.queue.remove(0);
-                self.queue.push(signal);
-                evicted
+                // By enqueue time, not by position. `fire` sorts the queue by
+                // weight descending, so index 0 is the *heaviest* remaining
+                // signal — evicting it did the opposite of what the policy
+                // name promises, and under load it would systematically
+                // discard the traffic the operator cared most about.
+                let oldest = self
+                    .queue
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, s)| (s.enqueued_at_ns, s.id))
+                    .map(|(i, _)| i);
+                match oldest {
+                    Some(idx) => {
+                        let evicted = self.queue.remove(idx);
+                        self.queue.push(signal);
+                        evicted
+                    }
+                    // Only reachable with max_queue_depth == 0, where there is
+                    // nothing to evict and the arrival is the drop.
+                    None => signal,
+                }
             }
             OverflowPolicy::DropLowestWeight => {
                 // Find the weakest queued signal. Ties drop the arrival, so a
@@ -985,6 +1003,53 @@ mod tests {
         oldest.admit(sig(2, 0.1), 1.0, 0, &mut rng);
         let out = oldest.admit(sig(3, 0.9), 1.0, 0, &mut rng);
         assert_eq!(out.dropped.map(|d| d.id), Some(sig(1, 0.1).id));
+    }
+
+    #[test]
+    fn drop_oldest_evicts_by_arrival_time_not_by_position() {
+        // The existing overflow test never fires (base_threshold 1000), so the
+        // queue is only ever in push order and position happens to match
+        // arrival order. `fire` sorts by weight descending and drains a batch,
+        // so a *partly* drained queue is left in weight order — and index 0 is
+        // then the heaviest remaining signal, not the oldest. Evicting it
+        // inverted the policy, discarding exactly the traffic an operator
+        // cares most about.
+        let mut rng = SplitMix64::seeded(41);
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 0.5,
+            fire_batch_size: 1,
+            max_queue_depth: 3,
+            overflow_policy: OverflowPolicy::DropOldest,
+            ..cfg()
+        });
+
+        let at = |n: u64, w: f32, t: u64| QueuedSignal {
+            enqueued_at_ns: t,
+            ..sig(n, w)
+        };
+
+        // Build up to a fire. Ascending weights, so arrival order and weight
+        // order are opposites.
+        let a = at(1, 0.10, 1_000);
+        let b = at(2, 0.20, 2_000);
+        st.admit(a.clone(), 1.0, 1_000, &mut rng);
+        st.admit(b.clone(), 1.0, 2_000, &mut rng);
+        let fired = st.admit(at(3, 0.30, 3_000), 1.0, 3_000, &mut rng);
+        assert_eq!(fired.fired.len(), 1, "0.10+0.20+0.30 should cross 0.5");
+        assert_eq!(st.queue_depth(), 2, "a batch of 1 leaves two behind");
+        // The remainder is now [b, a] — weight order, the reverse of arrival.
+
+        // Fill the last slot without firing again.
+        st.admit(at(4, 0.05, 4_000), 1.0, 4_000, &mut rng);
+        assert_eq!(st.queue_depth(), 3);
+
+        let out = st.admit(at(5, 0.05, 5_000), 1.0, 5_000, &mut rng);
+        let dropped = out.dropped.expect("the queue was full, so something went");
+        assert_eq!(
+            dropped.id, a.id,
+            "DropOldest must evict the earliest arrival; index 0 was the \
+             heaviest remaining signal"
+        );
     }
 
     #[test]

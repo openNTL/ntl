@@ -121,12 +121,29 @@ different result depending on how often the sweep happened to run.
 
 ### Thresholds
 
-| Threshold | Default | Transition |
-|---|---|---|
-| Active → Weakening | 0.1 | Weight drops below |
-| Weakening → Dormant | 0.01 | Weight drops below |
-| Dormant → Pruned | 0.01 for 168 hours | Duration in dormant |
-| Dormant → Active | 0.1 | Signal received, weight restored |
+| Threshold | Config field | Default | Transition |
+|---|---|---|---|
+| Active → Weakening | `active_threshold` | 0.1 | Weight drops below |
+| Weakening → Dormant | `dormancy_threshold` | 0.01 | Weight drops below |
+| Dormant → Pruned | `prune_after_hours` | 0.01 for 168 hours | Duration in dormant |
+| Dormant → Active | `active_threshold` | 0.1 | Signal received, weight restored |
+
+Both thresholds MUST come from configuration. Hard-coding them means an
+operator who retunes `initial_weight` — or either threshold — silently gets
+the shipped values, and the note above about `initial_weight` sitting exactly
+on the Active boundary stops being checkable.
+
+### Forming Is Not Weight-Derived
+
+The four weight-derived states are Active, Weakening, Dormant and Pruned. A
+weight update MUST NOT move a synapse out of `Forming`: weight says nothing
+about whether two nodes have authenticated each other, and `Forming` exists
+precisely to keep a synapse ineligible to carry signals until they have. Only
+the completion of the handshake leaves `Forming`.
+
+An implementation that promotes on the first weight update makes the state
+skippable, and with it the guarantee that traffic only ever crosses an
+authenticated synapse.
 
 ## Transport Negotiation
 

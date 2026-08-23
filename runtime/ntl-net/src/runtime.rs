@@ -402,26 +402,22 @@ impl Runtime {
                 match node.poll_activation() {
                     Ok(released) => {
                         for queued in released {
-                            let body = pending.lock().await.remove(&queued.id);
-                            #[allow(clippy::cast_possible_truncation)]
-                            let hops = body.as_ref().map_or(0, |s| s.trace.len() as u16);
-                            let _ = events
-                                .send(Event::Released {
-                                    signal_id: queued.id,
-                                    signal: body.map(Box::new),
-                                })
-                                .await;
-                            if queued.delivery.requires_receipt() {
-                                let receipt = Receipt::delivered(queued.id, hops);
-                                send_receipt_to(
-                                    &node,
-                                    &identity,
-                                    &sessions,
-                                    &receipt,
-                                    &queued.origin,
-                                )
-                                .await;
-                            }
+                            // The same path the arrival case takes.
+                            // Previously this emitted an event and a
+                            // *positive* receipt without forwarding, so a
+                            // relay node reported delivery for a signal it
+                            // then dropped.
+                            release_signal(
+                                &node,
+                                &identity,
+                                &sessions,
+                                &pending,
+                                &events,
+                                queued.id,
+                                None,
+                                Release::Guard,
+                            )
+                            .await;
                         }
                     }
                     Err(e) => tracing::warn!(error = %e, "activation poll failed"),
@@ -711,19 +707,46 @@ async fn read_loop(
             .flatten()
             .map(|r| r.id);
 
+        // Cache the body before deciding anything. The activation gate is a
+        // queue, so this signal may be released later — in a batch triggered
+        // by a *different* arrival, or by the latency guard — and at that
+        // point only the cache still has it. Caching unconditionally and
+        // removing on release is what makes the two release paths identical.
+        remember_body(pending, node, &signal).await;
+
         let disposition = match node.receive(&signal, arrival.as_ref()) {
             Ok(d) => d,
             Err(e) => {
                 tracing::warn!(error = %e, "receive failed");
+                pending.lock().await.remove(&signal.id);
                 continue;
             }
         };
+
+        // A signal displaced from the queue to make room for this one owes its
+        // own sender a receipt, and that is a different peer.
+        if let Some(ev) = &disposition.evicted {
+            let body = pending.lock().await.remove(&ev.signal.id);
+            let _ = events
+                .send(Event::Refused {
+                    signal_id: ev.signal.id,
+                    reason: ev.reason,
+                })
+                .await;
+            if ev.needs_receipt() {
+                #[allow(clippy::cast_possible_truncation)]
+                let hops = body.as_ref().map_or(0, |s| s.trace.len() as u16);
+                let receipt = Receipt::rejected(ev.signal.id, ev.reason, hops);
+                send_receipt_to(node, identity, sessions, &receipt, &ev.signal.origin).await;
+            }
+        }
 
         // A refusal owes the sender a receipt when the class demands one.
         if let Some(receipt) = &disposition.receipt {
             send_receipt(node, identity, sessions, receipt, &signal.origin, peer).await;
         }
         if let Some(reason) = disposition.rejected {
+            pending.lock().await.remove(&signal.id);
             let _ = events
                 .send(Event::Refused {
                     signal_id: signal.id,
@@ -733,84 +756,234 @@ async fn read_loop(
             continue;
         }
 
-        // Queued rather than fired: keep the body so the latency guard can
-        // release it in full later.
-        let fired_this_signal = disposition.handle_locally.iter().any(|h| h.id == signal.id);
-        if !fired_this_signal && !disposition.was_rejected() {
-            let mut guard = pending.lock().await;
-            if guard.len() < node.config().activation.max_queue_depth {
-                guard.insert(signal.id, signal.clone());
-            }
-        }
-
-        // Anything the gate released is handled here, and acknowledged
-        // signals get a positive receipt.
-        for handled in &disposition.handle_locally {
-            if handled.id == signal.id {
-                let _ = events
-                    .send(Event::Handled {
-                        signal: Box::new(signal.clone()),
-                    })
-                    .await;
-                if signal.requires_receipt() {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let hops = signal.trace.len() as u16;
-                    let receipt = Receipt::delivered(signal.id, hops);
-                    send_receipt(node, identity, sessions, &receipt, &signal.origin, peer).await;
-                }
-            }
-        }
-
-        // Forward onward.
-        if !disposition.forward_to.is_empty() {
-            let explored = disposition.forward_to.iter().any(|f| f.explored);
-            let mut sent = 0;
-            let guard = sessions.read().await;
-            for forward in &disposition.forward_to {
-                if let Some(session) = guard.get(&forward.peer) {
-                    let mut outbound = signal.clone();
-                    outbound.hop(identity.node_id.clone());
-                    outbound.attenuate_for_hop(
-                        node.config().propagation.attenuation_factor,
-                        node.config().propagation.min_propagation_weight,
-                    );
-                    if session.outbound.try_send(outbound).is_ok() {
-                        sent += 1;
-                    }
-                }
-            }
-            drop(guard);
-            let _ = events
-                .send(Event::Forwarded {
-                    signal_id: signal.id,
-                    peers: sent,
-                    explored,
-                })
-                .await;
+        // Everything the gate released, not just this arrival. `fire` drains a
+        // batch, so a heavy arrival can release several queued signals at
+        // once; handling only the arrival dropped the rest silently — no
+        // local handling, no forward, and no receipt for their senders.
+        for released in &disposition.handle_locally {
+            let plan = if released.id == signal.id {
+                Some(disposition.forward_to.clone())
+            } else {
+                None
+            };
+            release_signal(
+                node,
+                identity,
+                sessions,
+                pending,
+                events,
+                released.id,
+                plan,
+                Release::Threshold,
+            )
+            .await;
         }
     }
 }
 
-/// Send a receipt toward an origin, with no particular peer to fall back on.
+/// Cache a signal body against a later release, bounded by the queue depth.
+///
+/// Evicts the oldest entry when full rather than declining to insert. Refusing
+/// to insert meant the map saturated permanently — nothing removed entries
+/// except the guard path — after which every subsequent release had no body,
+/// so it could not be forwarded and `ntl listen` stopped showing it.
+async fn remember_body(pending: &PendingBodies, node: &Arc<Node>, signal: &Signal) {
+    let cap = node.config().activation.max_queue_depth.max(1);
+    let mut guard = pending.lock().await;
+    if guard.len() >= cap {
+        // SignalId is a ULID, so the smallest is the oldest.
+        if let Some(oldest) = guard.keys().min().copied() {
+            guard.remove(&oldest);
+        }
+    }
+    guard.insert(signal.id, signal.clone());
+}
+
+/// Why the activation gate let a signal through.
+///
+/// Only affects which event is reported, but the distinction matters to an
+/// operator: a stream of guard releases means the node is saturated and
+/// signals are being let through to avoid starving them, rather than because
+/// they earned their way past the threshold.
+#[derive(Debug, Clone, Copy)]
+enum Release {
+    /// The accumulated potential crossed the threshold.
+    Threshold,
+    /// The queue latency guard released it before it could starve.
+    Guard,
+}
+
+/// Handle one signal the activation gate has released.
+///
+/// The single path for both releases: the batch drained on arrival, and the
+/// latency guard's later drain. `plan` is the forwarding decision
+/// [`Node::receive`] already journalled for the arriving signal; `None` means
+/// this signal was released without one and needs a fresh plan.
+#[allow(clippy::too_many_arguments)]
+async fn release_signal(
+    node: &Arc<Node>,
+    identity: &Arc<Identity>,
+    sessions: &Arc<RwLock<HashMap<NodeId, Session>>>,
+    pending: &PendingBodies,
+    events: &mpsc::Sender<Event>,
+    signal_id: ntl_core::SignalId,
+    plan: Option<Vec<ntl_core::node::Forward>>,
+    how: Release,
+) {
+    let Some(body) = pending.lock().await.remove(&signal_id) else {
+        // The body aged out of the cache. Report the release so an operator
+        // sees it rather than losing the signal without trace, but there is
+        // nothing left to forward.
+        let _ = events
+            .send(Event::Released {
+                signal_id,
+                signal: None,
+            })
+            .await;
+        return;
+    };
+
+    // Exactly one event per released signal. Emitting both `Released` and
+    // `Handled` printed the same signal twice in `ntl listen`.
+    let _ = events
+        .send(match how {
+            Release::Threshold => Event::Handled {
+                signal: Box::new(body.clone()),
+            },
+            Release::Guard => Event::Released {
+                signal_id,
+                signal: Some(Box::new(body.clone())),
+            },
+        })
+        .await;
+
+    let arrival = body
+        .trace
+        .last()
+        .and_then(|hop| node.store().synapse_for_peer(hop).ok().flatten())
+        .map(|r| r.id);
+
+    let forwards = match plan {
+        Some(p) => p,
+        None => match node.plan_release(&body, arrival.as_ref()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "planning a released signal failed");
+                Vec::new()
+            }
+        },
+    };
+
+    let delivered = forward_signal(node, identity, sessions, events, &body, &forwards).await;
+
+    // The receipt reports what this node did with the signal, which is
+    // hop-local by design — end-to-end receipts are out of scope, see
+    // threat-model. Handling it locally is delivery; failing to reach any
+    // chosen peer is not.
+    if body.requires_receipt() {
+        #[allow(clippy::cast_possible_truncation)]
+        let hops = body.trace.len() as u16;
+        let receipt = if forwards.is_empty() || delivered {
+            Receipt::delivered(signal_id, hops)
+        } else {
+            Receipt::rejected(signal_id, ntl_core::RejectReason::TransportFailure, hops)
+        };
+        send_receipt_to(node, identity, sessions, &receipt, &body.origin).await;
+    }
+}
+
+/// Transmit a signal over the chosen synapses.
+///
+/// Returns whether at least one peer actually received it. A journalled
+/// decision whose peer has no live session is resolved as a transport failure
+/// straight away: leaving it pending would let the timeout sweep attribute the
+/// disconnection to the *path* several seconds later, and the two are
+/// different things to learn from.
+async fn forward_signal(
+    node: &Arc<Node>,
+    identity: &Arc<Identity>,
+    sessions: &Arc<RwLock<HashMap<NodeId, Session>>>,
+    events: &mpsc::Sender<Event>,
+    signal: &Signal,
+    forwards: &[ntl_core::node::Forward],
+) -> bool {
+    if forwards.is_empty() {
+        return false;
+    }
+
+    let explored = forwards.iter().any(|f| f.explored);
+    let mut sent = 0;
+    let mut failed = Vec::new();
+    {
+        let guard = sessions.read().await;
+        for forward in forwards {
+            let live = guard.get(&forward.peer).filter(|session| {
+                let mut outbound = signal.clone();
+                outbound.hop(identity.node_id.clone());
+                outbound.attenuate_for_hop(
+                    node.config().propagation.attenuation_factor,
+                    node.config().propagation.min_propagation_weight,
+                );
+                session.outbound.try_send(outbound).is_ok()
+            });
+            if live.is_some() {
+                sent += 1;
+            } else {
+                failed.push(forward.journal_id);
+            }
+        }
+    }
+
+    for journal_id in failed {
+        if let Err(e) = node.fail_forward(journal_id) {
+            tracing::warn!(error = %e, "recording a transport failure failed");
+        }
+    }
+
+    let _ = events
+        .send(Event::Forwarded {
+            signal_id: signal.id,
+            peers: sent,
+            explored,
+        })
+        .await;
+
+    sent > 0
+}
+
+/// Send a receipt toward an origin we hold no arriving peer for.
+///
+/// Returns whether it was actually handed to a session.
+///
+/// Only a *direct* session with the origin will do. This used to fall back to
+/// `sessions.values().next()` — an arbitrary peer — on the theory that a
+/// receipt routes `Targeted` and can be relayed. Nothing relays it: the read
+/// loop applies a receipt to a local decision and `continue`s, so a receipt
+/// reaching a node that has no matching decision is discarded. Sending to an
+/// arbitrary peer therefore looked like delivery and was not, which is worse
+/// than not sending: the caller believed the sender had been told.
+///
+/// Receipts are consequently one hop, the same bound and for the same reason
+/// as signature verification — see threat-model §8.
 async fn send_receipt_to(
     node: &Arc<Node>,
     identity: &Arc<Identity>,
     sessions: &Arc<RwLock<HashMap<NodeId, Session>>>,
     receipt: &Receipt,
     origin: &NodeId,
-) {
+) -> bool {
     let Ok(mut signal) = node.emit(Signal::receipt(receipt, origin.clone())) else {
-        return;
+        return false;
     };
     if ntl_core::crypto::sign_signal(&ClassicalModule, &mut signal, &identity.private).is_err() {
-        return;
+        return false;
     }
     let guard = sessions.read().await;
-    // Prefer the origin directly; otherwise any peer, since the receipt
-    // routes Targeted and can be relayed.
-    if let Some(session) = guard.get(origin).or_else(|| guard.values().next()) {
-        let _ = session.outbound.try_send(signal);
+    if let Some(session) = guard.get(origin) {
+        return session.outbound.try_send(signal).is_ok();
     }
+    tracing::debug!(%origin, "no direct session with the origin; receipt not sent");
+    false
 }
 
 /// Send a receipt back toward a signal's origin.

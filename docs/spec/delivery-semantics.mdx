@@ -75,6 +75,7 @@ receipt toward `signal.origin`, with a reason:
 | `below_threshold` | Weight fell below `min_propagation_weight` |
 | `ttl_exhausted` | TTL reached zero at a node that cannot handle it |
 | `no_route` | No candidate synapse passed scope filtering |
+| `transport_failure` | Candidates were chosen, but no connection to any of them was live |
 | `queue_full` | Activation queue full and overflow policy selected this signal |
 | `unsupported_type` | Node cannot handle the type and cannot forward it |
 | `refused` | Policy declined the signal |
@@ -128,7 +129,8 @@ Rules:
 2. A retry MUST NOT reuse the recorded trace: the point of retrying is to
    let stochastic selection find a different path.
 3. Retrying MUST stop at the first terminal receipt — positive, or negative
-   with a reason other than a transient one. `no_route` and `queue_full` are
+   with a reason other than a transient one. `no_route`, `transport_failure`
+   and `queue_full` are
    transient; `unsupported_type` and `refused` are terminal, and retrying
    them is pure waste.
 4. On exhausting the budget the sender MUST surface a delivery failure to

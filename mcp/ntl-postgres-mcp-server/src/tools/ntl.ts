@@ -95,8 +95,19 @@ export async function listSynapses(
             GREATEST(
               s.weight * power(
                 2,
-                -((SELECT t FROM now_ns) - s.last_active_ns)::double precision
-                  / ($4::double precision * ${NS_PER_HOUR})
+                -- LEAST(..., 0) clamps the exponent, matching the Rust
+                -- guard that returns the weight unchanged when now_ns is at or
+                -- before last_active_ns. A
+                -- last_active_ns in the future — clock skew between the node
+                -- writing rows and the database reading them, or a restored
+                -- backup — otherwise makes the exponent positive and reports a
+                -- decayed weight *above* the stored one, which is not a thing
+                -- decay can do.
+                LEAST(
+                  -((SELECT t FROM now_ns) - s.last_active_ns)::double precision
+                    / ($4::double precision * ${NS_PER_HOUR}),
+                  0
+                )
               ),
               0.001
             )::real AS decayed_weight,

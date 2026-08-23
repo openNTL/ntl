@@ -60,6 +60,21 @@ pending queue:
 Signals left in the queue remain queued and are eligible for the next fire.
 They MUST NOT be discarded merely because they were not in this batch.
 
+**Every signal in the batch MUST be processed in full** — handled locally,
+routed onward, and receipted — not only the arrival that crossed the
+threshold. This is the same divergence as above, one layer out: an
+implementation whose transport handles "the signal it just read" and ignores
+the rest of the batch loses up to `fire_batch_size − 1` signals per fire,
+silently, with no receipt for their senders. The batch is the unit of work, so
+a node MUST route each member of it and MUST NOT assume a member's route was
+planned when it was queued: the route is chosen at release, because the
+topology may have changed while it waited.
+
+The same applies to a signal released by the latency guard below: releasing it
+means processing it, which includes forwarding it. A node that emits a positive
+receipt for a released signal it did not then route has reported a delivery
+that did not happen.
+
 `fire_batch_size` defaults to `16`. A node MUST NOT set it to zero. Setting
 it to `1` yields the strictest interpretation of the earlier text — one
 signal per fire — at the cost of throughput, and is permitted.
@@ -136,11 +151,21 @@ When a signal arrives at a full queue, the node MUST apply its configured
 |---|---|
 | `drop_lowest_weight` (default) | Compare the arriving signal against the lowest-weight queued signal. The lower-weight of the two is dropped. Ties drop the arriving signal. |
 | `drop_newest` | Drop the arriving signal. |
-| `drop_oldest` | Drop the oldest queued signal, admit the arriving one. |
+| `drop_oldest` | Drop the *earliest-enqueued* queued signal, admit the arriving one. |
 
 `drop_lowest_weight` is the default because it preserves the protocol's own
 priority semantics: weight already means importance everywhere else, and
 under load is exactly when honouring it matters.
+
+<Warning>
+`drop_oldest` MUST select by enqueue time, not by queue position. Firing
+reorders the queue by weight descending, so after any partial drain the front
+of the queue is the *heaviest* remaining signal. An implementation that pops
+the front believes it is shedding stale traffic while it is in fact shedding
+the most important traffic it holds — the exact inverse of the policy, and
+worst under precisely the load that triggers it. Each queued signal therefore
+needs its enqueue timestamp retained.
+</Warning>
 
 ### Overflow and Delivery Class
 
@@ -154,6 +179,15 @@ A dropped signal's delivery class governs whether the drop is reported:
 A node MUST NOT drop an `acknowledged` signal without emitting a receipt,
 even under overflow. Overload is not an exemption from the delivery
 guarantee — it is the case the guarantee exists for.
+
+This holds for the *displaced* signal as much as the refused arrival. Under
+`drop_lowest_weight` and `drop_oldest` the signal dropped is usually **not**
+the one that just arrived, and it came from a different peer — so the receipt
+goes to a different origin, over a different synapse, and cannot be inferred
+from the arrival. An implementation MUST therefore report which signal was
+displaced, not merely that a drop occurred. Reporting only the arrival's fate
+is the shape this omission takes in practice, and it silently breaks the
+guarantee for exactly the signals the policy chose to sacrifice.
 
 ### Interaction With the Dynamic Threshold
 

@@ -33,6 +33,30 @@ pub struct Disposition {
     pub receipt: Option<Receipt>,
     /// Why the signal was refused, if it was.
     pub rejected: Option<RejectReason>,
+    /// A *different* signal this arrival displaced from the activation queue.
+    ///
+    /// Separate from [`Self::receipt`] because it is owed to a different
+    /// sender than the arriving signal's: overflow is not an exemption from
+    /// the delivery guarantee, and the caller cannot infer who to tell from
+    /// the arrival alone.
+    pub evicted: Option<Evicted>,
+}
+
+/// A queued signal displaced by a later arrival.
+#[derive(Debug, Clone)]
+pub struct Evicted {
+    /// The signal that was dropped.
+    pub signal: crate::activation::QueuedSignal,
+    /// Why it was dropped.
+    pub reason: RejectReason,
+}
+
+impl Evicted {
+    /// Whether the displaced signal's sender must be told.
+    #[must_use]
+    pub fn needs_receipt(&self) -> bool {
+        self.signal.delivery.requires_receipt()
+    }
 }
 
 impl Disposition {
@@ -44,6 +68,7 @@ impl Disposition {
             handle_locally: Vec::new(),
             receipt: None,
             rejected: None,
+            evicted: None,
         }
     }
 
@@ -56,6 +81,7 @@ impl Disposition {
                 .requires_receipt()
                 .then(|| Receipt::rejected(signal.id, reason, hops)),
             rejected: Some(reason),
+            evicted: None,
         }
     }
 
@@ -184,6 +210,7 @@ impl Node {
             handle_locally: Vec::new(),
             receipt: None,
             rejected: None,
+            evicted: None,
         })
     }
 
@@ -242,16 +269,30 @@ impl Node {
 
         // A dropped acknowledged signal owes its sender a receipt: overload is
         // not an exemption from the delivery guarantee.
+        let mut evicted = None;
         if let Some(dropped) = &admit.dropped {
+            let reason = admit.drop_reason.unwrap_or(RejectReason::QueueFull);
             if dropped.id == signal.id {
-                let reason = admit.drop_reason.unwrap_or(RejectReason::QueueFull);
                 return Ok(Disposition::refuse(signal, reason, hops));
             }
+            // A different signal was displaced to make room for this one. Its
+            // sender is owed the same receipt the arriving signal would have
+            // been owed, and it is a different peer — which is why this is
+            // reported rather than folded into `receipt`. Reporting it is what
+            // `AdmitOutcome`'s documented guarantee requires, and dropping it
+            // silently was the one overflow policy that broke that promise.
+            evicted = Some(Evicted {
+                signal: dropped.clone(),
+                reason,
+            });
         }
 
         if admit.fired.is_empty() {
-            // Queued, not refused. Nothing to do yet.
-            return Ok(Disposition::nothing());
+            // Queued, not refused. Nothing to do yet beyond any eviction.
+            return Ok(Disposition {
+                evicted,
+                ..Disposition::nothing()
+            });
         }
 
         // Route onward.
@@ -259,7 +300,10 @@ impl Node {
 
         if forward_to.is_empty() && signal.requires_receipt() {
             // Nowhere to send it and the sender must be told.
-            return Ok(Disposition::refuse(signal, RejectReason::NoRoute, hops));
+            return Ok(Disposition {
+                evicted,
+                ..Disposition::refuse(signal, RejectReason::NoRoute, hops)
+            });
         }
 
         Ok(Disposition {
@@ -267,7 +311,64 @@ impl Node {
             handle_locally: admit.fired,
             receipt: None,
             rejected: None,
+            evicted,
         })
+    }
+
+    /// Plan forwarding for a signal the activation gate has already released.
+    ///
+    /// The gate is a queue, so a signal can be admitted on one arrival and
+    /// released later — in a batch alongside a different arrival, or by the
+    /// latency guard. At that point it still needs a route, and
+    /// [`Self::receive`] cannot have planned one because it did not know the
+    /// signal would fire.
+    ///
+    /// Deduplication and admission are deliberately not re-run: this signal
+    /// has already passed both, and `check_and_set_seen` would now see its own
+    /// claim and report it as a duplicate.
+    ///
+    /// # Errors
+    /// Returns an error if the store is unavailable.
+    pub fn plan_release(
+        &self,
+        signal: &Signal,
+        arrival_synapse: Option<&SynapseId>,
+    ) -> crate::Result<Vec<Forward>> {
+        let now = self.clock.now_ns();
+        self.plan_forwarding(signal, arrival_synapse, now)
+    }
+
+    /// Record that a forwarding decision could not be transmitted.
+    ///
+    /// A journalled decision whose peer turned out to be unreachable must be
+    /// resolved, not left pending: the learning model treats silence as a
+    /// pending decision, so an untransmitted forward would sit in the journal
+    /// until the timeout sweep attributed it to the *path* rather than to the
+    /// transport. Resolving it immediately teaches the model the same thing
+    /// several seconds sooner.
+    ///
+    /// # Errors
+    /// Returns an error if the store is unavailable.
+    pub fn fail_forward(
+        &self,
+        journal_id: crate::store::JournalId,
+    ) -> crate::Result<Option<learning::WeightUpdate>> {
+        let now = self.clock.now_ns();
+        let resolved = self
+            .store
+            .resolve_decision(journal_id, Outcome::TransportFailure, now)
+            .map_err(|e| crate::Error::Serialization(e.to_string()))?;
+
+        // First outcome wins, so a decision a receipt already resolved is
+        // untouched here.
+        let Some(entry) = resolved else {
+            return Ok(None);
+        };
+        if entry.resolved_at_ns != Some(now) {
+            return Ok(None);
+        }
+        self.apply_outcome_to_synapse(&entry, Outcome::TransportFailure, now)
+            .map(Some)
     }
 
     /// Choose synapses for a signal and journal each decision.
@@ -552,9 +653,11 @@ impl Node {
                 now,
                 rng.as_mut(),
             );
-            // A synapse that stays Forming can never carry traffic; the
-            // handshake is the binary's job, so it opens Active here.
-            s.state = crate::synapse::SynapseState::Active;
+            // A synapse that stays Forming can never carry traffic. The
+            // handshake is the transport's job, and this method is only
+            // reached once it has verified the peer's identity against the
+            // key that signed it — so completing it here is correct.
+            s.activate();
             s
         };
 

@@ -13,7 +13,11 @@ pub struct SynapseId(pub String);
 
 impl std::fmt::Display for SynapseId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "syn:{}", &self.0[..8.min(self.0.len())])
+        // Truncate by characters, not bytes. Slicing `&self.0[..8]` panics on
+        // a char boundary, and an id is a `TEXT` column: a store written by
+        // another implementation may hold anything. A panic in `Display` would
+        // surface inside a log line, which is the worst place for one.
+        write!(f, "syn:{}", self.0.chars().take(8).collect::<String>())
     }
 }
 
@@ -125,6 +129,12 @@ pub struct Synapse {
     /// Weight decay rate per decay interval.
     pub decay_rate: f32,
 
+    /// Weight at or above which this synapse is `Active`.
+    pub active_threshold: f32,
+
+    /// Weight below which this synapse becomes `Dormant`.
+    pub dormancy_threshold: f32,
+
     /// Weight attenuation factor for signals passing through.
     pub attenuation_factor: f32,
 
@@ -142,6 +152,15 @@ pub struct SynapseConfig {
     pub max_weight: f32,
     /// Weight decay rate per hour.
     pub decay_rate: f32,
+    /// Weight at or above which a synapse is `Active`.
+    ///
+    /// Named here rather than hard-coded because it and `initial_weight`
+    /// coincide at `0.1` by default, which is exactly the boundary
+    /// [synapse-lifecycle](https://openntl.org/spec/synapse-lifecycle)
+    /// warns about: a freshly formed synapse sits on it, so one rejection
+    /// moves it to `Weakening`. An operator retuning one of the two must be
+    /// able to see the other.
+    pub active_threshold: f32,
     /// Weight threshold below which synapse becomes dormant.
     pub dormancy_threshold: f32,
     /// Hours in dormant state before pruning.
@@ -162,6 +181,7 @@ impl Default for SynapseConfig {
             initial_weight: 0.1,
             max_weight: 1.0,
             decay_rate: 0.01,
+            active_threshold: 0.1,
             dormancy_threshold: 0.01,
             prune_after_hours: 168, // 7 days
             max_synapses: 1000,
@@ -202,6 +222,8 @@ impl Synapse {
             error_rate: 0.0,
             max_weight: config.max_weight,
             decay_rate: config.decay_rate,
+            active_threshold: config.active_threshold,
+            dormancy_threshold: config.dormancy_threshold,
             attenuation_factor: config.attenuation_factor,
             type_affinity: std::collections::HashMap::new(),
         }
@@ -279,6 +301,19 @@ impl Synapse {
         count as f32 / total as f32
     }
 
+    /// Mark the handshake complete, leaving `Forming`.
+    ///
+    /// The only way out of `Forming`, and deliberately so: a weight update is
+    /// not evidence that two nodes have authenticated each other, so
+    /// `update_state` leaves the state alone. The caller must have verified
+    /// the peer's identity against the key that signed its handshake before
+    /// calling this.
+    pub fn activate(&mut self) {
+        if self.state == SynapseState::Forming {
+            self.state = SynapseState::Active;
+        }
+    }
+
     /// Activate a dormant synapse.
     pub fn reactivate(&mut self, config: &SynapseConfig) {
         if self.state == SynapseState::Dormant {
@@ -332,6 +367,8 @@ impl Synapse {
             error_rate: record.error_rate,
             max_weight: config.max_weight,
             decay_rate: config.decay_rate,
+            active_threshold: config.active_threshold,
+            dormancy_threshold: config.dormancy_threshold,
             attenuation_factor: record.attenuation_factor,
             type_affinity: record.type_affinity.clone(),
         }
@@ -393,15 +430,26 @@ impl Synapse {
         self.update_state();
     }
 
-    /// Update state based on current weight.
+    /// Update state from the current weight and the configured thresholds.
+    ///
+    /// Two states are not weight-derived and so are left alone:
+    ///
+    /// - `Pruned` is terminal.
+    /// - `Forming` means the handshake has not completed. A weight update is
+    ///   not evidence that it has, and promoting on one would make
+    ///   `Forming` skippable — the state exists precisely so that a synapse
+    ///   is ineligible to carry signals until both sides have authenticated
+    ///   ([synapse-lifecycle](https://openntl.org/spec/synapse-lifecycle),
+    ///   "Eligibility to Carry Signals"). Only [`Self::activate`] leaves
+    ///   `Forming`.
     fn update_state(&mut self) {
-        if self.state == SynapseState::Pruned {
-            return; // Terminal state
+        if matches!(self.state, SynapseState::Pruned | SynapseState::Forming) {
+            return;
         }
 
-        if self.weight >= 0.1 {
+        if self.weight >= self.active_threshold {
             self.state = SynapseState::Active;
-        } else if self.weight >= 0.01 {
+        } else if self.weight >= self.dormancy_threshold {
             self.state = SynapseState::Weakening;
         } else {
             self.state = SynapseState::Dormant;
@@ -419,6 +467,68 @@ mod tests {
 
     fn test_nodes() -> (NodeId, NodeId) {
         (NodeId(vec![0u8; 32]), NodeId(vec![1u8; 32]))
+    }
+
+    #[test]
+    fn a_weight_update_does_not_promote_a_forming_synapse() {
+        // Forming means "handshake incomplete", and a weight change says
+        // nothing about the handshake. Promoting here would make the state
+        // skippable, and it is what makes a synapse ineligible to carry
+        // signals before both sides have authenticated.
+        let (local, remote) = test_nodes();
+        let mut synapse = Synapse::new(local, remote, &test_config());
+        assert_eq!(synapse.state, SynapseState::Forming);
+
+        synapse.strengthen(1.0, 0.5);
+        assert_eq!(
+            synapse.state,
+            SynapseState::Forming,
+            "a weight update must not complete the handshake"
+        );
+        assert!(!synapse.state.can_carry());
+
+        synapse.activate();
+        assert_eq!(synapse.state, SynapseState::Active);
+    }
+
+    #[test]
+    fn state_thresholds_follow_configuration() {
+        // Previously hard-coded at 0.1/0.01, so retuning the config silently
+        // did nothing.
+        let (local, remote) = test_nodes();
+        let config = SynapseConfig {
+            active_threshold: 0.5,
+            dormancy_threshold: 0.2,
+            initial_weight: 0.6,
+            ..test_config()
+        };
+        let mut synapse = Synapse::new(local, remote, &config);
+        synapse.activate();
+        assert_eq!(synapse.state, SynapseState::Active);
+
+        // 0.6 * 0.9 = 0.54, still above the 0.5 active threshold.
+        synapse.weaken_failure();
+        assert_eq!(synapse.state, SynapseState::Active);
+
+        // 0.54 * 0.9 = 0.486, below it. The old hard-coded 0.1 would have
+        // kept this Active.
+        synapse.weaken_failure();
+        assert_eq!(synapse.state, SynapseState::Weakening);
+
+        synapse.weight = 0.19;
+        synapse.weaken_failure();
+        assert_eq!(synapse.state, SynapseState::Dormant);
+    }
+
+    #[test]
+    fn display_truncates_by_character_not_byte() {
+        // Ids come from a TEXT column, so a store written by another
+        // implementation may hold anything. Byte-slicing panicked mid-char,
+        // inside a log line.
+        let id = SynapseId("héllo wörld synapse".to_string());
+        assert_eq!(format!("{id}"), "syn:héllo wö");
+        assert_eq!(format!("{}", SynapseId("ab".to_string())), "syn:ab");
+        assert_eq!(format!("{}", SynapseId(String::new())), "syn:");
     }
 
     #[test]

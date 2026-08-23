@@ -270,6 +270,17 @@ So the honest statement of the current guarantee is:
 **Verified delivery is one hop in the reference implementation.** Multi-hop
 propagation works only between nodes that have each met the origin.
 
+Receipts inherit the same bound, for a related reason. A receipt is a
+`Targeted` signal addressed at the acknowledged signal's origin, and a node
+that receives one either matches it to a local pending decision or discards
+it — nothing relays it onward. A node with no direct session to the origin
+therefore cannot deliver a receipt at all, and MUST NOT hand it to an
+arbitrary peer in the hope that it will be forwarded: that looks like delivery
+and is not, so the node's own accounting records a sender as informed when it
+was not. Relaying receipts would need the same key distribution as above, plus
+a rule for relaying an unmatched receipt without turning every node into a
+free amplifier for forged ones (§2).
+
 Closing this needs key distribution, not a code fix. The obvious route is to
 carry the origin's public key in the signal: because the node ID is the key's
 hash, a recipient can check `blake3(carried_key) == origin` and then verify the

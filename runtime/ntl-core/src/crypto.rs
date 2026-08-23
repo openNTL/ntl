@@ -5,6 +5,30 @@
 
 use crate::Result;
 
+/// Crypto module identifiers this build can actually use.
+///
+/// A configuration naming anything else is rejected at load rather than
+/// ignored. The field used to default to `"pq-v1"` and be read by nothing,
+/// so every generated config claimed a post-quantum module while signing
+/// with Ed25519 — the worst kind of configuration option, one that appears
+/// to make a security choice and does not.
+#[must_use]
+pub fn supported_modules() -> &'static [&'static str] {
+    &[
+        #[cfg(feature = "classical-crypto")]
+        "classical-v1",
+    ]
+}
+
+/// The module a build uses when configuration does not say.
+///
+/// `None` when no crypto feature is enabled, in which case a node cannot
+/// sign and must be configured with one.
+#[must_use]
+pub fn default_module() -> Option<&'static str> {
+    supported_modules().first().copied()
+}
+
 /// Public key bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey(pub Vec<u8>);

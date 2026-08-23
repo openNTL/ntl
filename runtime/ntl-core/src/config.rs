@@ -29,7 +29,23 @@ pub struct NodeConfig {
     #[serde(default)]
     pub storage: StorageConfig,
     /// Crypto module to use.
+    ///
+    /// Must name a module this build supports; see
+    /// [`crate::crypto::supported_modules`]. Validated at load, because a
+    /// silently-ignored crypto setting is worse than a missing one.
+    #[serde(default = "default_crypto_module")]
     pub crypto_module: String,
+}
+
+/// Serde default for [`NodeConfig::crypto_module`].
+///
+/// Falls back to the literal rather than panicking when no crypto feature is
+/// enabled, so parsing still succeeds and `validate` produces the useful
+/// error instead of a deserialization failure.
+fn default_crypto_module() -> String {
+    crate::crypto::default_module()
+        .unwrap_or("classical-v1")
+        .to_string()
 }
 
 /// Which storage backend a node uses, and how.
@@ -98,7 +114,7 @@ impl Default for NodeConfig {
             learning: LearningConfig::default(),
             retry: RetryPolicy::default(),
             storage: StorageConfig::default(),
-            crypto_module: "pq-v1".to_string(),
+            crypto_module: default_crypto_module(),
         }
     }
 }
@@ -142,6 +158,25 @@ impl NodeConfig {
         self.learning.validate()?;
         self.propagation
             .validate(self.retry.required_dedup_secs())?;
+        // A crypto module this build cannot provide must fail loudly. The
+        // alternative is a node that reports one algorithm and uses another.
+        if !crate::crypto::supported_modules().contains(&self.crypto_module.as_str()) {
+            let supported = crate::crypto::supported_modules();
+            return Err(if supported.is_empty() {
+                format!(
+                    "crypto_module is {:?}, but this build has no crypto module \
+                     compiled in. Enable the `classical-crypto` feature.",
+                    self.crypto_module
+                )
+            } else {
+                format!(
+                    "crypto_module {:?} is not supported by this build. \
+                     Supported: {}.",
+                    self.crypto_module,
+                    supported.join(", ")
+                )
+            });
+        }
         if self.synapse.max_weight > self.learning.max_weight {
             return Err(format!(
                 "synapse.max_weight ({}) exceeds learning.max_weight ({})",
@@ -186,6 +221,54 @@ impl NodeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crypto_module_this_build_cannot_provide_is_rejected() {
+        // The field defaulted to "pq-v1" and was read by nothing, so every
+        // generated config advertised post-quantum crypto while signing with
+        // Ed25519. A config option that appears to make a security choice and
+        // does not is worse than no option.
+        let mut config = NodeConfig::default();
+        assert_eq!(
+            config.crypto_module, "classical-v1",
+            "the default must name what the build actually uses"
+        );
+        config.validate().expect("the default must validate");
+
+        for bogus in ["pq-v1", "hybrid-v1", "", "CLASSICAL-V1"] {
+            config.crypto_module = bogus.to_string();
+            let err = config
+                .validate()
+                .expect_err("an unsupported module must be refused");
+            assert!(
+                err.contains("crypto_module"),
+                "the error must name the field, got {err:?}"
+            );
+            assert!(
+                err.contains("classical-v1"),
+                "the error must say what is supported, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_shipped_example_config_parses_and_validates() {
+        // config.example.toml is the file operators copy. A key placed after a
+        // table header belongs to that table in TOML, so a top-level field
+        // written in the wrong place is silently misfiled — which is exactly
+        // what had happened to crypto_module.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config.example.toml");
+        let text = std::fs::read_to_string(path).expect("config.example.toml must exist");
+        let parsed: NodeConfig =
+            toml::from_str(&text).expect("the example config must parse as a NodeConfig");
+        parsed
+            .validate()
+            .expect("the example config must pass validation");
+        assert_eq!(
+            parsed.crypto_module, "classical-v1",
+            "the example must name a module that exists"
+        );
+    }
 
     #[test]
     fn default_config_is_valid() {

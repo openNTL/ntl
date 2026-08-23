@@ -307,6 +307,49 @@ for (const backend of backends()) {
         }
       });
 
+      it("never reports a decayed weight above the stored one", async () => {
+        // A last_active_ns in the future — clock skew between the node writing
+        // rows and the database reading them, or a restored backup — made the
+        // SQL exponent positive, so "decay" reported a weight *above* the
+        // stored value. The Rust implementation guards this; the SQL did not.
+        await db.query(
+          `INSERT INTO ${TEST_SCHEMA}.synapses
+             (id, peer, weight, attenuation_factor, state, type_affinity,
+              established_at_ns, last_active_ns, signals_transmitted,
+              signals_received, avg_latency_ns, error_rate)
+           VALUES ('syn-future', decode($1,'hex'), 0.5, 0.9, 'active', '{}'::jsonb,
+                   0, (EXTRACT(EPOCH FROM now()) * 1e9)::bigint + 86400000000000,
+                   0, 0, 0, 0)
+           ON CONFLICT (id) DO UPDATE SET last_active_ns = EXCLUDED.last_active_ns`,
+          ["ff".repeat(32)],
+        );
+
+        const result = await db.readOnly((tx) =>
+          ntlTools.listSynapses(tx, TEST_SCHEMA, {
+            state: "any",
+            decay_half_life_hours: 168,
+            limit: 50,
+            response_format: "json",
+          }),
+        );
+        const parsed = JSON.parse(textOf(result)) as {
+          synapses: { id: string; weight: number; decayed_weight: number }[];
+        };
+
+        for (const syn of parsed.synapses) {
+          expect(
+            syn.decayed_weight,
+            `${syn.id}: decay cannot increase a weight`,
+          ).toBeLessThanOrEqual(syn.weight);
+        }
+
+        const future = parsed.synapses.find((syn) => syn.id === "syn-future");
+        expect(future, "the future-dated synapse should be listed").toBeDefined();
+        expect(future?.decayed_weight).toBeCloseTo(0.5, 5);
+
+        await db.query(`DELETE FROM ${TEST_SCHEMA}.synapses WHERE id = 'syn-future'`);
+      });
+
       it("honours min_weight", async () => {
         const result = await db.readOnly((tx) =>
           ntlTools.listSynapses(tx, TEST_SCHEMA, {

@@ -62,6 +62,14 @@ pub enum RejectReason {
     TtlExhausted,
     /// No candidate synapse passed scope filtering.
     NoRoute,
+    /// Candidate synapses existed, but none could be transmitted over.
+    ///
+    /// Distinct from [`Self::NoRoute`]: that says the node knows of no path,
+    /// this says it chose one and the connection was gone. Both are
+    /// transient, but they are different things for an operator to read and
+    /// different things for the learning model to attribute — a peer whose
+    /// session dropped should cost the *transport*, not the path's score.
+    TransportFailure,
     /// The activation queue was full and overflow selected this signal.
     QueueFull,
     /// This node cannot handle the type and cannot forward it.
@@ -77,7 +85,7 @@ impl RejectReason {
     #[must_use]
     pub fn is_transient(self) -> bool {
         match self {
-            Self::NoRoute | Self::QueueFull | Self::BelowThreshold => true,
+            Self::NoRoute | Self::QueueFull | Self::BelowThreshold | Self::TransportFailure => true,
             Self::TtlExhausted | Self::UnsupportedType | Self::Refused => false,
         }
     }
@@ -89,6 +97,7 @@ impl RejectReason {
             Self::BelowThreshold => "below_threshold",
             Self::TtlExhausted => "ttl_exhausted",
             Self::NoRoute => "no_route",
+            Self::TransportFailure => "transport_failure",
             Self::QueueFull => "queue_full",
             Self::UnsupportedType => "unsupported_type",
             Self::Refused => "refused",

@@ -14,7 +14,7 @@ Creates a new `NodeBuilder` for configuring and initializing a node.
 ```rust
 let node = Node::builder()
     .with_config_file("~/.ntl/config.toml")    // Load from file
-    .with_crypto_module("pq-v1")                // Set crypto module
+    .with_crypto_module("classical-v1")                // Set crypto module
     .with_bootstrap(vec![                        // Override bootstrap nodes
         "ntl://bootstrap.openntl.org:4433",
     ])

@@ -1,5 +1,12 @@
 # NTL Node Configuration
-# https://ntl.openntl.org/guides/quickstart
+# https://openntl.org/guides/quickstart
+
+# The crypto module. Only "classical-v1" (Ed25519 signing, X25519 key
+# agreement) exists today, and a config naming anything else is refused at
+# load rather than ignored. Post-quantum and hybrid modules are the point of
+# the pluggable interface, but neither has shipped — see
+# https://openntl.org/spec/crypto-interface
+crypto_module = "classical-v1"
 
 [network]
 bootstrap_nodes = [
@@ -10,15 +17,11 @@ bootstrap_nodes = [
 bind_address = "0.0.0.0"
 port = 4433
 
-[crypto]
-module = "pq-v1"     # post-quantum default
-# module = "classical-v1"  # Ed25519/X25519 for legacy
-# module = "hybrid-v1"     # dual PQ + classical
-
 [synapse]
 initial_weight = 0.1
 max_weight = 1.0
 decay_rate = 0.01            # weight decay per hour
+active_threshold = 0.1         # at or above this, the synapse is Active
 dormancy_threshold = 0.01
 prune_after_hours = 168      # 7 days
 max_synapses = 1000
