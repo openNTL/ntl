@@ -1,18 +1,39 @@
-//! Activation model for NTL nodes.
+//! Activation model — admission control and backpressure.
 //!
-//! Replaces traditional rate limiting with biologically-inspired
-//! threshold-based signal processing.
+//! Implements [spec/activation-model][spec]. Replaces rate limiting with a
+//! threshold that rises under load, a bounded queue, and batched processing.
+//!
+//! [spec]: https://openntl.org/spec/activation-model
+//!
+//! Two things 0.1.0-draft left ambiguous are settled here.
+//!
+//! **What firing processes.** Potential accumulates across many signals, then
+//! the node "fires (processes the signal)" — which signal? When potential is
+//! a sum of contributions, the singular is meaningless, and an implementation
+//! that processes only the threshold-crossing signal leaks the rest. Firing
+//! now drains a *batch* in weight order.
+//!
+//! **Whether the queue is bounded.** `load_factor = queue_depth /
+//! max_queue_depth` implies a bound, while "no signals are dropped (they
+//! queue)" denies one. The queue is bounded, and [`OverflowPolicy`] says what
+//! happens when it fills.
 
 use serde::{Deserialize, Serialize};
 
+use crate::delivery::{DeliveryClass, RejectReason};
+use crate::rng::Rng;
+use crate::signal::SignalId;
+use crate::store::ActivationSnapshot;
+
 /// Activation function type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ActivationFunction {
     /// Binary: fires when potential >= threshold.
     Step,
-    /// Probabilistic: firing probability increases smoothly.
+    /// Probabilistic: firing probability rises smoothly through the threshold.
     Sigmoid,
-    /// Always passes a small fraction (leak rate = 0.01).
+    /// Like [`Self::Step`], but always passes a small fraction.
     Leaky,
 }
 
@@ -22,240 +43,1019 @@ impl Default for ActivationFunction {
     }
 }
 
+/// Hardware class of a node, selecting activation defaults.
+///
+/// A single global refractory period cannot serve both a solar-powered
+/// sensor and a datacentre node: 10 ms caps a node at 100 fires per second,
+/// which on server hardware is a self-inflicted throughput ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeClass {
+    /// Battery- or CPU-constrained device.
+    Edge,
+    /// General-purpose node.
+    Standard,
+    /// Server-class node; no artificial fire ceiling.
+    Server,
+    /// Bootstrap or infrastructure node.
+    Infrastructure,
+}
+
+impl Default for NodeClass {
+    fn default() -> Self {
+        Self::Edge
+    }
+}
+
+/// What happens when a signal arrives at a full queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverflowPolicy {
+    /// Drop whichever of the arriving and weakest-queued signal is lighter.
+    ///
+    /// The default: weight means importance everywhere else in the protocol,
+    /// and under load is exactly when honouring it matters.
+    DropLowestWeight,
+    /// Drop the arriving signal.
+    DropNewest,
+    /// Drop the oldest queued signal to admit the arriving one.
+    DropOldest,
+}
+
+impl Default for OverflowPolicy {
+    fn default() -> Self {
+        Self::DropLowestWeight
+    }
+}
+
 /// Configuration for the activation model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivationConfig {
+    /// Hardware class, which supplies the defaults below.
+    pub node_class: NodeClass,
     /// Base activation threshold.
     pub base_threshold: f32,
-    /// Activation function to use.
+    /// Activation function.
     pub activation_function: ActivationFunction,
-    /// Refractory period in milliseconds.
+    /// Refractory period in milliseconds. `0` disables it.
     pub refractory_period_ms: u64,
-    /// Maximum accumulated potential (prevents overflow).
+    /// Ceiling on accumulated potential.
     pub max_potential: f32,
-    /// Whether to dynamically adjust threshold based on load.
+    /// Whether the threshold rises with load.
     pub dynamic_threshold: bool,
+    /// Signals drained per fire. MUST be at least 1.
+    pub fire_batch_size: usize,
+    /// Queue bound. `load_factor` is defined against this.
+    pub max_queue_depth: usize,
+    /// What to drop when the queue is full.
+    pub overflow_policy: OverflowPolicy,
+    /// Leak probability for [`ActivationFunction::Leaky`].
+    pub leak_rate: f32,
+}
+
+impl ActivationConfig {
+    /// Defaults for a node class.
+    #[must_use]
+    pub fn for_class(class: NodeClass) -> Self {
+        let (refractory_ms, batch, depth, max_potential) = match class {
+            NodeClass::Edge => (10, 8, 256, 10.0),
+            NodeClass::Standard => (1, 16, 1_024, 10.0),
+            NodeClass::Server => (0, 64, 8_192, 50.0),
+            NodeClass::Infrastructure => (0, 128, 32_768, 100.0),
+        };
+        Self {
+            node_class: class,
+            base_threshold: 0.5,
+            activation_function: ActivationFunction::Step,
+            refractory_period_ms: refractory_ms,
+            max_potential,
+            dynamic_threshold: true,
+            fire_batch_size: batch,
+            max_queue_depth: depth,
+            overflow_policy: OverflowPolicy::DropLowestWeight,
+            leak_rate: 0.01,
+        }
+    }
+
+    /// Validate the configuration.
+    ///
+    /// # Errors
+    /// Returns a description of the first invalid field.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.fire_batch_size == 0 {
+            return Err(
+                "fire_batch_size must be at least 1, or the node can never process anything"
+                    .to_string(),
+            );
+        }
+        if self.max_queue_depth == 0 {
+            return Err("max_queue_depth must be at least 1".to_string());
+        }
+        if self.base_threshold <= 0.0 {
+            return Err(format!(
+                "base_threshold must be positive, got {}",
+                self.base_threshold
+            ));
+        }
+        if self.max_potential < self.base_threshold {
+            return Err(format!(
+                "max_potential ({}) must be at least base_threshold ({}), \
+                 or the node can never reach its threshold",
+                self.max_potential, self.base_threshold
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.leak_rate) {
+            return Err(format!("leak_rate must be in [0, 1], got {}", self.leak_rate));
+        }
+        Ok(())
+    }
 }
 
 impl Default for ActivationConfig {
     fn default() -> Self {
-        Self {
-            base_threshold: 0.5,
-            activation_function: ActivationFunction::Step,
-            refractory_period_ms: 10,
-            max_potential: 10.0,
-            dynamic_threshold: true,
-        }
+        Self::for_class(NodeClass::Edge)
     }
 }
 
-/// Activation state for a node.
+/// A signal waiting in the activation queue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueuedSignal {
+    /// Which signal.
+    pub id: SignalId,
+    /// Its weight, which orders both processing and overflow.
+    pub weight: f32,
+    /// Its delivery class, which decides whether a drop must be reported.
+    pub delivery: DeliveryClass,
+    /// When it was enqueued.
+    pub enqueued_at_ns: u64,
+}
+
+/// What happened when a signal was offered to the gate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdmitOutcome {
+    /// Signals to process now. Empty if the node did not fire.
+    pub fired: Vec<QueuedSignal>,
+    /// A signal dropped to make room, if any.
+    ///
+    /// When its delivery class is `Acknowledged`, the caller MUST emit a
+    /// negative receipt with [`Self::drop_reason`]. Overload is not an
+    /// exemption from the delivery guarantee — it is the case the guarantee
+    /// exists for.
+    pub dropped: Option<QueuedSignal>,
+    /// Why the drop happened.
+    pub drop_reason: Option<RejectReason>,
+}
+
+impl AdmitOutcome {
+    /// Whether the node fired.
+    #[must_use]
+    pub fn did_fire(&self) -> bool {
+        !self.fired.is_empty()
+    }
+
+    /// Whether a drop needs a negative receipt.
+    #[must_use]
+    pub fn needs_receipt(&self) -> bool {
+        self.dropped
+            .as_ref()
+            .is_some_and(|d| d.delivery.requires_receipt())
+    }
+}
+
+/// The activation gate.
 #[derive(Debug)]
 pub struct ActivationState {
-    /// Current accumulated potential.
     potential: f32,
-    /// Current effective threshold.
     threshold: f32,
-    /// Base threshold (before dynamic adjustment).
     base_threshold: f32,
-    /// Nanosecond timestamp when refractory period ends.
-    refractory_until: u64,
-    /// Refractory duration in nanoseconds.
+    refractory_until_ns: u64,
     refractory_period_ns: u64,
-    /// Activation function.
     function: ActivationFunction,
-    /// Maximum potential.
     max_potential: f32,
-    /// Whether dynamic threshold is enabled.
     dynamic: bool,
-    /// Signals processed (for stats).
+    fire_batch_size: usize,
+    max_queue_depth: usize,
+    overflow_policy: OverflowPolicy,
+    leak_rate: f32,
+    queue: Vec<QueuedSignal>,
     signals_fired: u64,
-    /// Signals accumulated but not yet fired.
-    signals_accumulated: u64,
+    signals_dropped: u64,
+    overflow_events: u64,
 }
 
 impl ActivationState {
-    /// Create a new activation state from configuration.
+    /// Create a gate from configuration.
     #[must_use]
     pub fn new(config: &ActivationConfig) -> Self {
         Self {
             potential: 0.0,
             threshold: config.base_threshold,
             base_threshold: config.base_threshold,
-            refractory_until: 0,
-            refractory_period_ns: config.refractory_period_ms * 1_000_000,
+            refractory_until_ns: 0,
+            refractory_period_ns: config.refractory_period_ms.saturating_mul(1_000_000),
             function: config.activation_function,
             max_potential: config.max_potential,
             dynamic: config.dynamic_threshold,
+            fire_batch_size: config.fire_batch_size.max(1),
+            max_queue_depth: config.max_queue_depth.max(1),
+            overflow_policy: config.overflow_policy,
+            leak_rate: config.leak_rate,
+            queue: Vec::new(),
             signals_fired: 0,
-            signals_accumulated: 0,
+            signals_dropped: 0,
+            overflow_events: 0,
         }
     }
 
-    /// Add a signal's contribution to the activation potential.
+    /// Restore from a persisted snapshot.
     ///
-    /// Returns `true` if the node fires (should process the signal).
-    pub fn accumulate(&mut self, signal_weight: f32, synapse_weight: f32) -> bool {
-        let contribution = signal_weight * synapse_weight;
+    /// The queue is not restored — in-flight signals are not durable — but
+    /// potential, threshold, and the refractory deadline are. Discarding them
+    /// would make a restart a free reset of backpressure.
+    pub fn restore(&mut self, snapshot: &ActivationSnapshot) {
+        self.potential = snapshot.potential.clamp(0.0, self.max_potential);
+        self.threshold = snapshot.threshold;
+        self.refractory_until_ns = snapshot.refractory_until_ns;
+        self.signals_fired = snapshot.signals_fired;
+    }
+
+    /// Capture a snapshot for persistence.
+    #[must_use]
+    pub fn snapshot(&self, now_ns: u64) -> ActivationSnapshot {
+        ActivationSnapshot {
+            potential: self.potential,
+            threshold: self.threshold,
+            refractory_until_ns: self.refractory_until_ns,
+            signals_fired: self.signals_fired,
+            taken_at_ns: now_ns,
+        }
+    }
+
+    /// Offer a signal to the gate.
+    ///
+    /// The signal is enqueued (subject to overflow), its contribution added to
+    /// potential, and — if the gate fires — a batch is drained and returned.
+    pub fn admit(
+        &mut self,
+        signal: QueuedSignal,
+        synapse_weight: f32,
+        now_ns: u64,
+        rng: &mut dyn Rng,
+    ) -> AdmitOutcome {
+        let contribution = signal.weight * synapse_weight;
         self.potential = (self.potential + contribution).min(self.max_potential);
-        self.signals_accumulated += 1;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        let (dropped, drop_reason) = self.enqueue(signal, now_ns);
 
-        if self.in_refractory(now) {
-            return false;
+        if self.dynamic {
+            self.recompute_threshold();
         }
 
-        let should_fire = self.evaluate();
+        let fired = if self.in_refractory(now_ns) || !self.evaluate(rng) {
+            Vec::new()
+        } else {
+            self.fire(now_ns)
+        };
 
-        if should_fire {
-            self.fire(now);
+        AdmitOutcome {
+            fired,
+            dropped,
+            drop_reason,
+        }
+    }
+
+    /// Enqueue, applying the overflow policy if the queue is full.
+    fn enqueue(
+        &mut self,
+        signal: QueuedSignal,
+        _now_ns: u64,
+    ) -> (Option<QueuedSignal>, Option<RejectReason>) {
+        if self.queue.len() < self.max_queue_depth {
+            self.queue.push(signal);
+            return (None, None);
         }
 
-        should_fire
+        self.overflow_events += 1;
+        self.signals_dropped += 1;
+
+        let dropped = match self.overflow_policy {
+            OverflowPolicy::DropNewest => signal,
+            OverflowPolicy::DropOldest => {
+                let evicted = self.queue.remove(0);
+                self.queue.push(signal);
+                evicted
+            }
+            OverflowPolicy::DropLowestWeight => {
+                // Find the weakest queued signal. Ties drop the arrival, so a
+                // flood of equal-weight signals cannot displace what is
+                // already committed.
+                let weakest = self
+                    .queue
+                    .iter()
+                    .enumerate()
+                    .min_by(|a, b| {
+                        a.1.weight
+                            .partial_cmp(&b.1.weight)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, s)| (i, s.weight));
+
+                match weakest {
+                    Some((idx, weight)) if weight < signal.weight => {
+                        let evicted = self.queue.remove(idx);
+                        self.queue.push(signal);
+                        evicted
+                    }
+                    _ => signal,
+                }
+            }
+        };
+
+        (Some(dropped), Some(RejectReason::QueueFull))
+    }
+
+    /// Drain a batch in weight order and reset potential.
+    fn fire(&mut self, now_ns: u64) -> Vec<QueuedSignal> {
+        // Weight descending; ties broken on identifier so the order is total
+        // and reproducible.
+        self.queue.sort_by(|a, b| {
+            b.weight
+                .partial_cmp(&a.weight)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        let take = self.fire_batch_size.min(self.queue.len());
+        let batch: Vec<QueuedSignal> = self.queue.drain(..take).collect();
+
+        // Potential resets once per fire, not once per signal: a batch of
+        // sixteen costs the same refractory period as a batch of one, which is
+        // what makes batching worth doing under load.
+        self.potential = 0.0;
+        self.refractory_until_ns = now_ns.saturating_add(self.refractory_period_ns);
+        self.signals_fired += batch.len() as u64;
+        batch
     }
 
     /// Evaluate the activation function.
-    fn evaluate(&self) -> bool {
+    fn evaluate(&self, rng: &mut dyn Rng) -> bool {
+        if self.queue.is_empty() {
+            return false;
+        }
         match self.function {
             ActivationFunction::Step => self.potential >= self.threshold,
             ActivationFunction::Sigmoid => {
                 let probability = 1.0 / (1.0 + (-10.0 * (self.potential - self.threshold)).exp());
-                rand::random::<f32>() < probability
+                rng.next_f32() < probability
             }
             ActivationFunction::Leaky => {
-                if self.potential >= self.threshold {
-                    true
-                } else {
-                    rand::random::<f32>() < 0.01
-                }
+                self.potential >= self.threshold || rng.next_f32() < self.leak_rate
             }
         }
     }
 
-    /// Fire the activation gate.
-    fn fire(&mut self, now_ns: u64) {
-        self.potential = 0.0;
-        self.refractory_until = now_ns + self.refractory_period_ns;
-        self.signals_fired += 1;
+    /// Recompute the threshold from current load.
+    fn recompute_threshold(&mut self) {
+        self.threshold = self.base_threshold * (1.0 + self.load_factor());
     }
 
-    /// Check if the node is in its refractory period.
-    fn in_refractory(&self, now_ns: u64) -> bool {
-        now_ns < self.refractory_until
+    /// Whether the gate is refractory.
+    #[must_use]
+    pub fn in_refractory(&self, now_ns: u64) -> bool {
+        now_ns < self.refractory_until_ns
     }
 
-    /// Adjust the threshold based on current load.
+    /// Current queue occupancy as a fraction of the bound, in `[0, 1]`.
+    #[must_use]
+    pub fn load_factor(&self) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = self.queue.len() as f32 / self.max_queue_depth as f32;
+        ratio.clamp(0.0, 1.0)
+    }
+
+    /// Adjust the threshold for an externally measured load.
     pub fn adjust_for_load(&mut self, load_factor: f32) {
         if self.dynamic {
-            self.threshold = self.base_threshold * (1.0 + load_factor);
+            self.threshold = self.base_threshold * (1.0 + load_factor.clamp(0.0, 1.0));
         }
     }
 
-    /// Get the current potential.
+    /// Drain a batch without waiting for the threshold.
+    ///
+    /// For shutdown, and for a node draining a backlog after its refractory
+    /// period under a policy that would otherwise starve the queue.
+    pub fn drain_batch(&mut self, now_ns: u64) -> Vec<QueuedSignal> {
+        if self.queue.is_empty() {
+            return Vec::new();
+        }
+        self.fire(now_ns)
+    }
+
+    /// Accumulated potential.
     #[must_use]
     pub fn potential(&self) -> f32 {
         self.potential
     }
 
-    /// Get the current effective threshold.
+    /// Effective threshold.
     #[must_use]
     pub fn threshold(&self) -> f32 {
         self.threshold
     }
 
-    /// Get the number of times this gate has fired.
+    /// Signals waiting.
+    #[must_use]
+    pub fn queue_depth(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// Total signals processed.
     #[must_use]
     pub fn fire_count(&self) -> u64 {
         self.signals_fired
     }
 
-    /// Reset the activation state.
+    /// Total signals dropped to overflow.
+    #[must_use]
+    pub fn dropped_count(&self) -> u64 {
+        self.signals_dropped
+    }
+
+    /// Number of times the queue was full on arrival.
+    ///
+    /// Regular overflow means misconfiguration: either the queue is too small
+    /// for the traffic, or the dynamic threshold is off. Exposing the counter
+    /// makes that visible rather than inferred.
+    #[must_use]
+    pub fn overflow_count(&self) -> u64 {
+        self.overflow_events
+    }
+
+    /// Reset all state.
     pub fn reset(&mut self) {
         self.potential = 0.0;
         self.threshold = self.base_threshold;
-        self.refractory_until = 0;
+        self.refractory_until_ns = 0;
+        self.queue.clear();
         self.signals_fired = 0;
-        self.signals_accumulated = 0;
+        self.signals_dropped = 0;
+        self.overflow_events = 0;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rng::SplitMix64;
 
-    fn test_config() -> ActivationConfig {
+    const MS: u64 = 1_000_000;
+
+    fn cfg() -> ActivationConfig {
         ActivationConfig {
-            base_threshold: 0.5,
-            activation_function: ActivationFunction::Step,
-            refractory_period_ms: 0, // Disable for testing
-            max_potential: 10.0,
+            refractory_period_ms: 0,
             dynamic_threshold: false,
+            fire_batch_size: 4,
+            max_queue_depth: 8,
+            ..ActivationConfig::for_class(NodeClass::Edge)
+        }
+    }
+
+    fn sig(n: u64, weight: f32) -> QueuedSignal {
+        QueuedSignal {
+            id: SignalId::from_parts(1_700_000_000_000 + n, u128::from(n) << 64),
+            weight,
+            delivery: DeliveryClass::BestEffort,
+            enqueued_at_ns: 0,
+        }
+    }
+
+    fn ack_sig(n: u64, weight: f32) -> QueuedSignal {
+        QueuedSignal {
+            delivery: DeliveryClass::Acknowledged,
+            ..sig(n, weight)
+        }
+    }
+
+    // -- config ------------------------------------------------------------
+
+    #[test]
+    fn node_class_defaults_scale_with_capability() {
+        let edge = ActivationConfig::for_class(NodeClass::Edge);
+        let server = ActivationConfig::for_class(NodeClass::Server);
+
+        assert_eq!(edge.refractory_period_ms, 10);
+        assert_eq!(
+            server.refractory_period_ms, 0,
+            "a server-class node must not be capped at 100 fires/second"
+        );
+        assert!(server.fire_batch_size > edge.fire_batch_size);
+        assert!(server.max_queue_depth > edge.max_queue_depth);
+    }
+
+    #[test]
+    fn all_class_defaults_validate() {
+        for c in [
+            NodeClass::Edge,
+            NodeClass::Standard,
+            NodeClass::Server,
+            NodeClass::Infrastructure,
+        ] {
+            ActivationConfig::for_class(c)
+                .validate()
+                .unwrap_or_else(|e| panic!("{c:?} invalid: {e}"));
         }
     }
 
     #[test]
-    fn step_fires_above_threshold() {
-        let mut state = ActivationState::new(&test_config());
+    fn validate_rejects_zero_batch_size() {
+        let c = ActivationConfig {
+            fire_batch_size: 0,
+            ..cfg()
+        };
+        assert!(c.validate().unwrap_err().contains("fire_batch_size"));
+    }
 
-        // Below threshold
-        let fired = state.accumulate(0.3, 1.0);
-        assert!(!fired);
-        assert!((state.potential - 0.3).abs() < f32::EPSILON);
+    #[test]
+    fn validate_rejects_unreachable_threshold() {
+        let c = ActivationConfig {
+            base_threshold: 100.0,
+            max_potential: 1.0,
+            ..cfg()
+        };
+        assert!(c.validate().is_err());
+    }
 
-        // Above threshold (0.3 + 0.3 = 0.6 >= 0.5)
-        let fired = state.accumulate(0.3, 1.0);
-        assert!(fired);
-        assert!((state.potential - 0.0).abs() < f32::EPSILON); // Reset after firing
+    // -- firing ------------------------------------------------------------
+
+    #[test]
+    fn fires_once_potential_reaches_threshold() {
+        let mut st = ActivationState::new(&cfg());
+        let mut rng = SplitMix64::seeded(1);
+
+        let out = st.admit(sig(1, 0.3), 1.0, 0, &mut rng);
+        assert!(!out.did_fire(), "0.3 < 0.5 must not fire");
+        assert_eq!(st.queue_depth(), 1);
+
+        let out = st.admit(sig(2, 0.3), 1.0, 0, &mut rng);
+        assert!(out.did_fire(), "0.6 >= 0.5 must fire");
+        assert!((st.potential() - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn firing_drains_a_batch_not_one_signal() {
+        // The 0.1.0-draft ambiguity: with potential summed across many
+        // signals, processing only the threshold-crosser leaks the rest.
+        let mut st = ActivationState::new(&cfg());
+        let mut rng = SplitMix64::seeded(2);
+
+        for i in 0..4 {
+            st.admit(sig(i, 0.1), 1.0, 0, &mut rng);
+        }
+        assert_eq!(st.queue_depth(), 4, "below threshold, all should queue");
+
+        let out = st.admit(sig(99, 0.5), 1.0, 0, &mut rng);
+        assert!(out.did_fire());
+        assert_eq!(
+            out.fired.len(),
+            4,
+            "a fire must drain up to fire_batch_size, not a single signal"
+        );
+        assert_eq!(st.queue_depth(), 1, "the remainder must stay queued");
+    }
+
+    #[test]
+    fn batch_is_ordered_by_weight_descending() {
+        // A threshold above anything reachable keeps every signal queued, so
+        // ordering can be checked in isolation from firing.
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(3);
+        for (i, w) in [(1, 0.1), (2, 0.9), (3, 0.4), (4, 0.7)] {
+            assert!(!st.admit(sig(i, w), 1.0, 0, &mut rng).did_fire());
+        }
+        let batch = st.drain_batch(0);
+        let weights: Vec<f32> = batch.iter().map(|s| s.weight).collect();
+        assert_eq!(
+            weights,
+            vec![0.9, 0.7, 0.4, 0.1],
+            "the highest-weight signals must be processed first"
+        );
+    }
+
+    #[test]
+    fn leftover_signals_are_not_discarded() {
+        // Conservation: every admitted signal is eventually either fired or
+        // explicitly dropped. Nothing may vanish.
+        let mut st = ActivationState::new(&ActivationConfig {
+            fire_batch_size: 2,
+            max_queue_depth: 16,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(4);
+
+        const ADMITTED: usize = 20;
+        let mut fired = 0;
+        let mut dropped = 0;
+
+        for i in 0..ADMITTED as u64 {
+            let out = st.admit(sig(i, 0.4), 1.0, 0, &mut rng);
+            fired += out.fired.len();
+            if out.dropped.is_some() {
+                dropped += 1;
+            }
+        }
+        // Drain whatever remains.
+        loop {
+            let batch = st.drain_batch(0);
+            if batch.is_empty() {
+                break;
+            }
+            fired += batch.len();
+        }
+
+        assert_eq!(st.queue_depth(), 0, "the queue should be fully drained");
+        assert_eq!(
+            fired + dropped,
+            ADMITTED,
+            "every signal must be accounted for: {fired} fired + {dropped} \
+             dropped should equal {ADMITTED} admitted"
+        );
+    }
+
+    #[test]
+    fn potential_is_capped() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_potential: 5.0,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(5);
+        for i in 0..100 {
+            st.admit(sig(i, 1.0), 1.0, 0, &mut rng);
+        }
+        assert!(st.potential() <= 5.0);
     }
 
     #[test]
     fn synapse_weight_modulates_contribution() {
-        let mut state = ActivationState::new(&test_config());
-
-        // Signal weight 1.0 but synapse weight 0.1 = contribution 0.1
-        let fired = state.accumulate(1.0, 0.1);
-        assert!(!fired);
-        assert!((state.potential - 0.1).abs() < f32::EPSILON);
+        let mut st = ActivationState::new(&cfg());
+        let mut rng = SplitMix64::seeded(6);
+        let out = st.admit(sig(1, 1.0), 0.1, 0, &mut rng);
+        assert!(!out.did_fire(), "1.0 * 0.1 = 0.1 < 0.5");
+        assert!((st.potential() - 0.1).abs() < 1e-6);
     }
 
     #[test]
-    fn potential_capped_at_max() {
-        let mut state = ActivationState::new(&ActivationConfig {
-            base_threshold: 100.0, // High threshold so it won't fire
+    fn empty_queue_never_fires() {
+        let mut st = ActivationState::new(&cfg());
+        let mut rng = SplitMix64::seeded(7);
+        // Force potential high, then drain, then confirm no spurious fire.
+        st.admit(sig(1, 1.0), 1.0, 0, &mut rng);
+        assert!(st.drain_batch(0).len() <= 1);
+        assert!(st.drain_batch(0).is_empty());
+    }
+
+    // -- refractory --------------------------------------------------------
+
+    #[test]
+    fn refractory_period_blocks_firing() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            refractory_period_ms: 10,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(8);
+
+        let out = st.admit(sig(1, 1.0), 1.0, 0, &mut rng);
+        assert!(out.did_fire());
+        assert!(st.in_refractory(5 * MS));
+
+        let out = st.admit(sig(2, 1.0), 1.0, 5 * MS, &mut rng);
+        assert!(!out.did_fire(), "must not fire inside the refractory period");
+        assert_eq!(st.queue_depth(), 1, "but the signal must still queue");
+
+        let out = st.admit(sig(3, 1.0), 1.0, 11 * MS, &mut rng);
+        assert!(out.did_fire(), "must fire once the period elapses");
+    }
+
+    #[test]
+    fn zero_refractory_allows_back_to_back_fires() {
+        let mut st = ActivationState::new(&ActivationConfig {
             refractory_period_ms: 0,
-            ..test_config()
+            ..cfg()
         });
-
-        for _ in 0..100 {
-            state.accumulate(1.0, 1.0);
+        let mut rng = SplitMix64::seeded(9);
+        for i in 0..5 {
+            assert!(st.admit(sig(i, 1.0), 1.0, 0, &mut rng).did_fire());
         }
-
-        assert!(state.potential <= state.max_potential);
     }
 
+    // -- queue bound and overflow -----------------------------------------
+
     #[test]
-    fn dynamic_threshold_increases_with_load() {
-        let mut state = ActivationState::new(&ActivationConfig {
-            dynamic_threshold: true,
-            ..test_config()
+    fn load_factor_stays_in_unit_interval() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 4,
+            ..cfg()
         });
-
-        state.adjust_for_load(1.0); // 100% load
-        assert!((state.threshold - 1.0).abs() < f32::EPSILON); // 0.5 * (1 + 1.0) = 1.0
+        let mut rng = SplitMix64::seeded(10);
+        assert!((st.load_factor() - 0.0).abs() < f32::EPSILON);
+        for i in 0..20 {
+            st.admit(sig(i, 0.1), 1.0, 0, &mut rng);
+            assert!((0.0..=1.0).contains(&st.load_factor()));
+        }
+        assert!((st.load_factor() - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn fire_count_tracks() {
-        let mut state = ActivationState::new(&test_config());
+    fn queue_is_bounded() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0, // never fires
+            max_queue_depth: 4,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(11);
+        for i in 0..50 {
+            st.admit(sig(i, 0.5), 1.0, 0, &mut rng);
+        }
+        assert_eq!(st.queue_depth(), 4, "the queue must respect its bound");
+        assert!(st.overflow_count() > 0);
+    }
 
-        state.accumulate(1.0, 1.0); // Should fire
-        state.accumulate(1.0, 1.0); // Should fire again
-        state.accumulate(1.0, 1.0); // Should fire again
+    #[test]
+    fn drop_lowest_weight_evicts_the_weakest() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 3,
+            overflow_policy: OverflowPolicy::DropLowestWeight,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(12);
+        st.admit(sig(1, 0.9), 1.0, 0, &mut rng);
+        st.admit(sig(2, 0.1), 1.0, 0, &mut rng);
+        st.admit(sig(3, 0.8), 1.0, 0, &mut rng);
 
-        assert_eq!(state.fire_count(), 3);
+        let out = st.admit(sig(4, 0.5), 1.0, 0, &mut rng);
+        let dropped = out.dropped.expect("queue was full");
+        assert!(
+            (dropped.weight - 0.1).abs() < f32::EPSILON,
+            "the weakest queued signal should be evicted, not the arrival"
+        );
+        assert_eq!(out.drop_reason, Some(RejectReason::QueueFull));
+    }
+
+    #[test]
+    fn drop_lowest_weight_rejects_a_weaker_arrival() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 2,
+            overflow_policy: OverflowPolicy::DropLowestWeight,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(13);
+        st.admit(sig(1, 0.9), 1.0, 0, &mut rng);
+        st.admit(sig(2, 0.8), 1.0, 0, &mut rng);
+
+        let out = st.admit(sig(3, 0.01), 1.0, 0, &mut rng);
+        let dropped = out.dropped.expect("queue was full");
+        assert_eq!(dropped.id, sig(3, 0.01).id, "the weak arrival should be dropped");
+    }
+
+    #[test]
+    fn equal_weight_flood_cannot_displace_committed_signals() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 2,
+            overflow_policy: OverflowPolicy::DropLowestWeight,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(14);
+        st.admit(sig(1, 0.5), 1.0, 0, &mut rng);
+        st.admit(sig(2, 0.5), 1.0, 0, &mut rng);
+
+        for i in 10..20 {
+            let out = st.admit(sig(i, 0.5), 1.0, 0, &mut rng);
+            assert_eq!(
+                out.dropped.map(|d| d.id),
+                Some(sig(i, 0.5).id),
+                "on a tie the arrival is dropped, so a flood cannot evict \
+                 what is already queued"
+            );
+        }
+    }
+
+    #[test]
+    fn drop_newest_and_oldest_behave_as_named() {
+        let mut rng = SplitMix64::seeded(15);
+
+        let mut newest = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 2,
+            overflow_policy: OverflowPolicy::DropNewest,
+            ..cfg()
+        });
+        newest.admit(sig(1, 0.1), 1.0, 0, &mut rng);
+        newest.admit(sig(2, 0.1), 1.0, 0, &mut rng);
+        let out = newest.admit(sig(3, 0.9), 1.0, 0, &mut rng);
+        assert_eq!(out.dropped.map(|d| d.id), Some(sig(3, 0.9).id));
+
+        let mut oldest = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 2,
+            overflow_policy: OverflowPolicy::DropOldest,
+            ..cfg()
+        });
+        oldest.admit(sig(1, 0.1), 1.0, 0, &mut rng);
+        oldest.admit(sig(2, 0.1), 1.0, 0, &mut rng);
+        let out = oldest.admit(sig(3, 0.9), 1.0, 0, &mut rng);
+        assert_eq!(out.dropped.map(|d| d.id), Some(sig(1, 0.1).id));
+    }
+
+    #[test]
+    fn acknowledged_drop_demands_a_receipt() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 1,
+            overflow_policy: OverflowPolicy::DropNewest,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(16);
+        st.admit(sig(1, 0.5), 1.0, 0, &mut rng);
+
+        let out = st.admit(ack_sig(2, 0.5), 1.0, 0, &mut rng);
+        assert!(
+            out.needs_receipt(),
+            "overload is not an exemption from the delivery guarantee"
+        );
+        assert_eq!(out.drop_reason, Some(RejectReason::QueueFull));
+    }
+
+    #[test]
+    fn best_effort_drop_needs_no_receipt() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            base_threshold: 1_000.0,
+            max_queue_depth: 1,
+            overflow_policy: OverflowPolicy::DropNewest,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(17);
+        st.admit(sig(1, 0.5), 1.0, 0, &mut rng);
+        let out = st.admit(sig(2, 0.5), 1.0, 0, &mut rng);
+        assert!(out.dropped.is_some());
+        assert!(!out.needs_receipt());
+    }
+
+    // -- dynamic threshold -------------------------------------------------
+
+    #[test]
+    fn threshold_rises_with_load() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            dynamic_threshold: true,
+            ..cfg()
+        });
+        st.adjust_for_load(1.0);
+        assert!((st.threshold() - 1.0).abs() < f32::EPSILON, "0.5 * (1 + 1.0)");
+        st.adjust_for_load(0.0);
+        assert!((st.threshold() - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn static_threshold_ignores_load() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            dynamic_threshold: false,
+            ..cfg()
+        });
+        st.adjust_for_load(1.0);
+        assert!((st.threshold() - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dynamic_threshold_provides_backpressure() {
+        // Under sustained load the threshold should rise above its base,
+        // making the node more selective.
+        let mut st = ActivationState::new(&ActivationConfig {
+            dynamic_threshold: true,
+            base_threshold: 0.5,
+            max_queue_depth: 10,
+            fire_batch_size: 1,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(18);
+        for i in 0..9 {
+            st.admit(sig(i, 0.05), 1.0, 0, &mut rng);
+        }
+        assert!(
+            st.threshold() > 0.5,
+            "a loaded node must become more selective, got {}",
+            st.threshold()
+        );
+    }
+
+    // -- activation functions ---------------------------------------------
+
+    #[test]
+    fn leaky_passes_occasionally_below_threshold() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            activation_function: ActivationFunction::Leaky,
+            base_threshold: 100.0,
+            leak_rate: 0.5,
+            fire_batch_size: 1,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(19);
+        let mut fires = 0;
+        for i in 0..200 {
+            if st.admit(sig(i, 0.001), 1.0, 0, &mut rng).did_fire() {
+                fires += 1;
+            }
+        }
+        assert!(fires > 50, "leaky should pass a fraction; got {fires}");
+        assert!(fires < 200, "leaky should not pass everything");
+    }
+
+    #[test]
+    fn sigmoid_is_probabilistic_around_the_threshold() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            activation_function: ActivationFunction::Sigmoid,
+            fire_batch_size: 1,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(20);
+        let mut fires = 0;
+        for i in 0..500 {
+            if st.admit(sig(i, 0.5), 1.0, 0, &mut rng).did_fire() {
+                fires += 1;
+            }
+        }
+        assert!(fires > 0 && fires < 500, "sigmoid should be stochastic; got {fires}");
+    }
+
+    // -- persistence -------------------------------------------------------
+
+    #[test]
+    fn snapshot_roundtrip_preserves_backpressure() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            refractory_period_ms: 10,
+            base_threshold: 1_000.0,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(21);
+        st.admit(sig(1, 0.8), 1.0, 0, &mut rng);
+        let snap = st.snapshot(1_000);
+
+        let mut restored = ActivationState::new(&ActivationConfig {
+            refractory_period_ms: 10,
+            base_threshold: 1_000.0,
+            ..cfg()
+        });
+        restored.restore(&snap);
+        assert!((restored.potential() - st.potential()).abs() < 1e-6);
+        assert_eq!(restored.threshold(), st.threshold());
+    }
+
+    #[test]
+    fn restore_carries_the_refractory_deadline() {
+        // A restart must not be a free reset of backpressure.
+        let snap = ActivationSnapshot {
+            potential: 0.0,
+            threshold: 0.5,
+            refractory_until_ns: 50 * MS,
+            signals_fired: 7,
+            taken_at_ns: 10 * MS,
+        };
+        let mut st = ActivationState::new(&cfg());
+        st.restore(&snap);
+        assert!(st.in_refractory(20 * MS), "the deadline must survive a restart");
+        assert_eq!(st.fire_count(), 7);
+    }
+
+    #[test]
+    fn restore_clamps_potential_to_the_configured_max() {
+        let snap = ActivationSnapshot {
+            potential: 1e9,
+            threshold: 0.5,
+            refractory_until_ns: 0,
+            signals_fired: 0,
+            taken_at_ns: 0,
+        };
+        let mut st = ActivationState::new(&cfg());
+        st.restore(&snap);
+        assert!(
+            st.potential() <= cfg().max_potential,
+            "a corrupt or foreign snapshot must not exceed local limits"
+        );
+    }
+
+    #[test]
+    fn reset_clears_everything() {
+        let mut st = ActivationState::new(&cfg());
+        let mut rng = SplitMix64::seeded(22);
+        st.admit(sig(1, 1.0), 1.0, 0, &mut rng);
+        st.reset();
+        assert_eq!(st.queue_depth(), 0);
+        assert_eq!(st.fire_count(), 0);
+        assert!((st.potential() - 0.0).abs() < f32::EPSILON);
     }
 }

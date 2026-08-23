@@ -18,7 +18,7 @@ impl std::fmt::Display for SynapseId {
 }
 
 /// The lifecycle state of a synapse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SynapseState {
     /// Handshake in progress.
     Forming,
@@ -30,6 +30,38 @@ pub enum SynapseState {
     Dormant,
     /// Connection terminated, state archived.
     Pruned,
+}
+
+impl SynapseState {
+    /// Whether a synapse in this state may be chosen to carry a signal.
+    ///
+    /// `Weakening` counts. It means "below the active threshold, **still
+    /// connected**" — the connection is intact, the weight is merely low.
+    ///
+    /// Excluding it would be a correctness bug, not just a tuning choice.
+    /// A synapse recovers weight only by carrying traffic that then succeeds
+    /// ([`crate::learning`]), so a state that is both reachable by a single
+    /// negative outcome *and* ineligible for traffic is a one-way trap: the
+    /// synapse can never earn its way back. With `initial_weight` at 0.1 and
+    /// the Active floor also at 0.1, every new synapse would fall into that
+    /// trap on its first failure, and routing would ossify around whichever
+    /// peers happened to succeed first — the exact failure
+    /// [spec/learning-model](https://openntl.org/spec/learning-model) §4
+    /// exists to prevent.
+    ///
+    /// `Dormant` and `Pruned` are genuinely unavailable: the connection is
+    /// idle or gone, and must be re-established before it can carry anything.
+    /// `Forming` has not completed its handshake.
+    #[must_use]
+    pub fn can_carry(self) -> bool {
+        matches!(self, Self::Active | Self::Weakening)
+    }
+
+    /// Whether this state is terminal.
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Pruned)
+    }
 }
 
 /// The underlying transport for a synapse.
@@ -75,10 +107,10 @@ pub struct Synapse {
     pub transport: Transport,
 
     /// Timestamp when synapse was established (ns since epoch).
-    pub established_at: u64,
+    pub established_at_ns: u64,
 
     /// Timestamp of last signal activity (ns since epoch).
-    pub last_active: u64,
+    pub last_active_ns: u64,
 
     /// Total signals transmitted through this synapse.
     pub signals_transmitted: u64,
@@ -146,22 +178,28 @@ impl Default for SynapseConfig {
 
 impl Synapse {
     /// Create a new synapse in the Forming state.
+    ///
+    /// Time and randomness are injected so synapse formation is reproducible
+    /// in tests and the core stays free of an ambient clock.
     #[must_use]
-    pub fn new(local: NodeId, remote: NodeId, config: &SynapseConfig) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-
+    pub fn new_with(
+        local: NodeId,
+        remote: NodeId,
+        config: &SynapseConfig,
+        now_ns: u64,
+        rng: &mut dyn crate::rng::Rng,
+    ) -> Self {
+        let now = now_ns;
+        let id_bits = (u128::from(rng.next_u64()) << 64) | u128::from(rng.next_u64());
         Self {
-            id: SynapseId(ulid::Ulid::new().to_string()),
+            id: SynapseId(ulid::Ulid::from_parts(now_ns / 1_000_000, id_bits).to_string()),
             local_node: local,
             remote_node: remote,
             weight: config.initial_weight,
             state: SynapseState::Forming,
             transport: config.preferred_transport.clone(),
-            established_at: now,
-            last_active: now,
+            established_at_ns: now,
+            last_active_ns: now,
             signals_transmitted: 0,
             signals_received: 0,
             avg_latency_ns: 0,
@@ -171,6 +209,20 @@ impl Synapse {
             attenuation_factor: config.attenuation_factor,
             type_affinity: std::collections::HashMap::new(),
         }
+    }
+
+    /// Create a new synapse using the host clock and an identity-seeded
+    /// generator.
+    ///
+    /// Convenience for binaries and tests; core logic should prefer
+    /// [`Self::new_with`].
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn new(local: NodeId, remote: NodeId, config: &SynapseConfig) -> Self {
+        use crate::time::Clock as _;
+        let now = crate::time::SystemClock.now_ns();
+        let mut rng = crate::rng::SplitMix64::from_identity(&remote.0, now);
+        Self::new_with(local, remote, config, now, &mut rng)
     }
 
     /// Strengthen the synapse after a successful signal transmission.
@@ -194,12 +246,9 @@ impl Synapse {
     }
 
     /// Record a successful signal transmission.
-    pub fn record_transmission(&mut self, latency_ns: u64, signal_type: &str) {
+    pub fn record_transmission(&mut self, latency_ns: u64, signal_type: &str, now_ns: u64) {
         self.signals_transmitted += 1;
-        self.last_active = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        self.last_active_ns = now_ns;
 
         // Running average latency
         if self.avg_latency_ns == 0 {
@@ -215,12 +264,9 @@ impl Synapse {
     }
 
     /// Record a received signal.
-    pub fn record_reception(&mut self) {
+    pub fn record_reception(&mut self, now_ns: u64) {
         self.signals_received += 1;
-        self.last_active = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        self.last_active_ns = now_ns;
     }
 
     /// Get the affinity score for a specific signal type.
@@ -240,6 +286,112 @@ impl Synapse {
             self.weight = config.initial_weight;
             self.state = SynapseState::Active;
         }
+    }
+
+    /// Project to the persistent record.
+    #[must_use]
+    pub fn to_record(&self) -> crate::store::SynapseRecord {
+        crate::store::SynapseRecord {
+            id: self.id.clone(),
+            peer: self.remote_node.clone(),
+            weight: self.weight,
+            attenuation_factor: self.attenuation_factor,
+            state: self.state,
+            type_affinity: self.type_affinity.clone(),
+            established_at_ns: self.established_at_ns,
+            last_active_ns: self.last_active_ns,
+            signals_transmitted: self.signals_transmitted,
+            signals_received: self.signals_received,
+            avg_latency_ns: self.avg_latency_ns,
+            error_rate: self.error_rate,
+        }
+    }
+
+    /// Rehydrate from a persistent record.
+    ///
+    /// The record carries the learned state; transport and local
+    /// configuration come from `config`, since neither is a property of the
+    /// peer relationship.
+    #[must_use]
+    pub fn from_record(
+        record: &crate::store::SynapseRecord,
+        local: NodeId,
+        config: &SynapseConfig,
+    ) -> Self {
+        Self {
+            id: record.id.clone(),
+            local_node: local,
+            remote_node: record.peer.clone(),
+            weight: record.weight,
+            state: record.state,
+            transport: config.preferred_transport.clone(),
+            established_at_ns: record.established_at_ns,
+            last_active_ns: record.last_active_ns,
+            signals_transmitted: record.signals_transmitted,
+            signals_received: record.signals_received,
+            avg_latency_ns: record.avg_latency_ns,
+            error_rate: record.error_rate,
+            max_weight: config.max_weight,
+            decay_rate: config.decay_rate,
+            attenuation_factor: record.attenuation_factor,
+            type_affinity: record.type_affinity.clone(),
+        }
+    }
+
+    /// Apply a learning update from a resolved routing outcome.
+    ///
+    /// Returns the update that was applied, so the caller can record the
+    /// magnitude against the peer's influence budget.
+    pub fn apply_outcome(
+        &mut self,
+        outcome: crate::store::Outcome,
+        signal_weight: f32,
+        signal_type: &str,
+        peer_influence_used: f32,
+        learning: &crate::learning::LearningConfig,
+    ) -> crate::learning::WeightUpdate {
+        let update = crate::learning::apply_reward(
+            self.weight,
+            outcome,
+            signal_weight,
+            peer_influence_used,
+            learning,
+        );
+        self.weight = update.after.min(self.max_weight);
+
+        let affinity = self.affinity_for(signal_type);
+        let updated = crate::learning::apply_affinity_update(affinity, outcome, learning);
+        // Affinity is stored as counts; a positive outcome adds evidence.
+        if updated > affinity {
+            *self
+                .type_affinity
+                .entry(signal_type.to_string())
+                .or_insert(0) += 1;
+        }
+
+        self.update_state();
+        update
+    }
+
+    /// Apply the signature-failure penalty.
+    pub fn apply_signature_failure(&mut self, learning: &crate::learning::LearningConfig) {
+        self.weight = crate::learning::apply_signature_penalty(self.weight, learning);
+        self.update_state();
+    }
+
+    /// Weight after time-based decay, without mutating.
+    #[must_use]
+    pub fn decayed_weight(&self, now_ns: u64, learning: &crate::learning::LearningConfig) -> f32 {
+        crate::learning::decayed_weight(self.weight, self.last_active_ns, now_ns, learning)
+    }
+
+    /// Apply time-based decay by half-life.
+    ///
+    /// Supersedes the old per-interval `decay()`, whose result depended on
+    /// how often the sweep happened to run.
+    pub fn apply_decay(&mut self, now_ns: u64, learning: &crate::learning::LearningConfig) {
+        self.weight = self.decayed_weight(now_ns, learning);
+        self.update_state();
     }
 
     /// Update state based on current weight.
@@ -331,13 +483,101 @@ mod tests {
     }
 
     #[test]
+    fn weakening_synapses_can_still_carry_traffic() {
+        // Regression: a synapse recovers weight only by carrying traffic that
+        // succeeds. Making Weakening ineligible turns one bad outcome into a
+        // permanent exclusion, and routing ossifies.
+        assert!(SynapseState::Active.can_carry());
+        assert!(
+            SynapseState::Weakening.can_carry(),
+            "Weakening means 'below threshold, still connected' — excluding it \
+             would make weight recovery impossible"
+        );
+        assert!(!SynapseState::Dormant.can_carry());
+        assert!(!SynapseState::Pruned.can_carry());
+        assert!(!SynapseState::Forming.can_carry());
+    }
+
+    #[test]
+    fn a_single_failure_does_not_permanently_exclude_a_new_synapse() {
+        // initial_weight and the Active floor are both 0.1, so one negative
+        // outcome drops a fresh synapse to Weakening. It must remain eligible.
+        let (local, remote) = test_nodes();
+        let config = test_config();
+        let mut rng = crate::rng::SplitMix64::seeded(1);
+        let mut synapse = Synapse::new_with(local, remote, &config, 1_000, &mut rng);
+        synapse.state = SynapseState::Active;
+
+        let learning = crate::learning::LearningConfig::default();
+        synapse.apply_outcome(
+            crate::store::Outcome::Rejected,
+            0.8,
+            "data",
+            0.0,
+            &learning,
+        );
+
+        assert!(
+            synapse.weight < config.initial_weight,
+            "a rejection should reduce the weight"
+        );
+        assert!(
+            synapse.state.can_carry(),
+            "but the synapse must still be able to earn its weight back, \
+             state was {:?} at weight {}",
+            synapse.state,
+            synapse.weight
+        );
+    }
+
+    #[test]
+    fn record_roundtrip_preserves_learned_state() {
+        let (local, remote) = test_nodes();
+        let mut rng = crate::rng::SplitMix64::seeded(2);
+        let mut synapse = Synapse::new_with(local.clone(), remote, &test_config(), 1_000, &mut rng);
+        synapse.weight = 0.42;
+        synapse.type_affinity.insert("Query".into(), 9);
+        synapse.state = SynapseState::Weakening;
+
+        let record = synapse.to_record();
+        let restored = Synapse::from_record(&record, local, &test_config());
+
+        assert!((restored.weight - 0.42).abs() < f32::EPSILON);
+        assert_eq!(restored.type_affinity.get("Query"), Some(&9));
+        assert_eq!(restored.state, SynapseState::Weakening);
+        assert_eq!(restored.id, synapse.id);
+    }
+
+    #[test]
+    fn half_life_decay_replaces_per_interval_decay() {
+        let (local, remote) = test_nodes();
+        let mut rng = crate::rng::SplitMix64::seeded(3);
+        let mut synapse = Synapse::new_with(local, remote, &test_config(), 0, &mut rng);
+        synapse.weight = 0.8;
+        synapse.last_active_ns = 0;
+        synapse.state = SynapseState::Active;
+
+        let learning = crate::learning::LearningConfig::default();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let half_life_ns =
+            (learning.decay_half_life_hours as u64) * crate::time::NANOS_PER_HOUR;
+        synapse.apply_decay(half_life_ns, &learning);
+
+        assert!(
+            (synapse.weight - 0.4).abs() < 0.01,
+            "one half-life should halve the weight, got {}",
+            synapse.weight
+        );
+    }
+
+    #[test]
     fn type_affinity_tracking() {
         let (local, remote) = test_nodes();
         let mut synapse = Synapse::new(local, remote, &test_config());
 
-        synapse.record_transmission(1000, "query");
-        synapse.record_transmission(1000, "query");
-        synapse.record_transmission(1000, "data");
+        synapse.record_transmission(1000, "query", 5_000);
+        synapse.record_transmission(1000, "query", 5_000);
+        synapse.record_transmission(1000, "data", 5_000);
 
         assert!((synapse.affinity_for("query") - 0.666).abs() < 0.01);
         assert!((synapse.affinity_for("data") - 0.333).abs() < 0.01);

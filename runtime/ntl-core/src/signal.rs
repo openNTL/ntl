@@ -8,27 +8,109 @@ use ulid::Ulid;
 
 use crate::propagation::PropagationScope;
 
-/// Unique identifier for a signal, based on ULID for lexicographic time-ordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Unique identifier for a signal, based on ULID for lexicographic
+/// time-ordering.
+///
+/// Serialises as the 16 raw bytes the wire format specifies, not as the
+/// 26-character Crockford base32 string — the string form is for humans and
+/// logs, and costs 10 extra bytes per signal on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SignalId(Ulid);
 
+impl Serialize for SignalId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&self.0.to_bytes())
+    }
+}
+
+impl<'de> Deserialize<'de> for SignalId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = SignalId;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a 16-byte ULID")
+            }
+
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<SignalId, E> {
+                let bytes: [u8; 16] = v.try_into().map_err(|_| {
+                    E::invalid_length(v.len(), &"exactly 16 bytes")
+                })?;
+                Ok(SignalId::from_bytes(bytes))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<SignalId, A::Error> {
+                let mut bytes = [0u8; 16];
+                for (i, slot) in bytes.iter_mut().enumerate() {
+                    *slot = seq
+                        .next_element()?
+                        .ok_or_else(|| serde::de::Error::invalid_length(i, &"exactly 16 bytes"))?;
+                }
+                Ok(SignalId::from_bytes(bytes))
+            }
+
+            // JSON has no byte type, so accept the string form there too.
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<SignalId, E> {
+                Ulid::from_string(v)
+                    .map(SignalId)
+                    .map_err(|e| E::custom(format!("invalid ULID {v:?}: {e}")))
+            }
+        }
+
+        deserializer.deserialize_bytes(Visitor)
+    }
+}
+
 impl SignalId {
-    /// Generate a new signal ID.
+    /// Build an identifier from an explicit millisecond timestamp and
+    /// randomness.
+    ///
+    /// Time and randomness are injected rather than read from the ambient
+    /// environment: `ulid`'s own constructor pulls in `getrandom`, which does
+    /// not build for `wasm32-unknown-unknown`, and an injected clock makes
+    /// ULID time-ordering directly testable.
     #[must_use]
-    pub fn new() -> Self {
-        Self(Ulid::new())
+    pub fn from_parts(timestamp_ms: u64, randomness: u128) -> Self {
+        Self(Ulid::from_parts(timestamp_ms, randomness))
     }
 
-    /// Get the timestamp component of the ID.
+    /// Generate an identifier from a clock and a randomness source.
+    pub fn generate(clock: &dyn crate::time::Clock, rng: &mut dyn crate::rng::Rng) -> Self {
+        let ms = clock.now_ns() / 1_000_000;
+        let randomness = (u128::from(rng.next_u64()) << 64) | u128::from(rng.next_u64());
+        Self::from_parts(ms, randomness)
+    }
+
+    /// Generate an identifier using the host clock.
+    ///
+    /// Convenience for binaries; core logic should prefer
+    /// [`Self::generate`] so its time source stays injectable.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn generate_now(rng: &mut dyn crate::rng::Rng) -> Self {
+        Self::generate(&crate::time::SystemClock, rng)
+    }
+
+    /// The timestamp component, in milliseconds since the Unix epoch.
     #[must_use]
     pub fn timestamp_ms(&self) -> u64 {
         self.0.timestamp_ms()
     }
-}
 
-impl Default for SignalId {
-    fn default() -> Self {
-        Self::new()
+    /// The 16-byte wire representation.
+    #[must_use]
+    pub fn to_bytes(self) -> [u8; 16] {
+        self.0.to_bytes()
+    }
+
+    /// Parse from the 16-byte wire representation.
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(Ulid::from_bytes(bytes))
     }
 }
 
@@ -53,8 +135,12 @@ pub enum SignalType {
     Heartbeat,
     /// Announces node capability.
     Discovery,
-    /// Confirms signal receipt.
-    Ack,
+    /// Reports the outcome of an acknowledged signal.
+    ///
+    /// Named `Ack` in 0.1.0-draft. The wire value is unchanged; the type now
+    /// carries a structured outcome, because a bare confirmation cannot say
+    /// *why* a signal failed.
+    Receipt,
     /// Application-defined signal type.
     Custom(String),
 }
@@ -70,12 +156,23 @@ impl SignalType {
             Self::Command => 3,
             Self::Heartbeat => 4,
             Self::Discovery => 5,
-            Self::Ack => 6,
+            Self::Receipt => 6,
             Self::Custom(_) => 15,
         }
     }
 
+    /// Whether this type may itself request acknowledgement.
+    ///
+    /// A receipt is never acknowledged, so the protocol cannot recurse.
+    #[must_use]
+    pub fn can_be_acknowledged(&self) -> bool {
+        !matches!(self, Self::Receipt)
+    }
+
     /// Parse from wire format type byte.
+    ///
+    /// Returns `None` for byte 15 (`Custom`): the discriminant alone does not
+    /// carry the application-defined name, so the caller must supply it.
     #[must_use]
     pub fn from_type_byte(byte: u8) -> Option<Self> {
         match byte {
@@ -85,7 +182,7 @@ impl SignalType {
             3 => Some(Self::Command),
             4 => Some(Self::Heartbeat),
             5 => Some(Self::Discovery),
-            6 => Some(Self::Ack),
+            6 => Some(Self::Receipt),
             _ => None,
         }
     }
@@ -157,6 +254,13 @@ pub struct Signal {
 
     /// Searchable tags.
     pub tags: Vec<String>,
+
+    /// Delivery class.
+    ///
+    /// Part of the signed body, so an intermediate node cannot downgrade an
+    /// acknowledged signal to best-effort.
+    #[serde(default)]
+    pub delivery: crate::delivery::DeliveryClass,
 }
 
 /// Builder for constructing signals with a fluent API.
@@ -169,6 +273,7 @@ pub struct SignalBuilder {
     scope: PropagationScope,
     correlation_id: Option<SignalId>,
     tags: Vec<String>,
+    delivery: crate::delivery::DeliveryClass,
 }
 
 impl Signal {
@@ -206,6 +311,20 @@ impl Signal {
     #[must_use]
     pub fn heartbeat() -> SignalBuilder {
         SignalBuilder::new(SignalType::Heartbeat, "heartbeat")
+    }
+
+    /// Create a Receipt signal builder acknowledging `correlation_id`.
+    ///
+    /// Receipts always route `Targeted` toward the acknowledged signal's
+    /// origin, and are themselves never acknowledged.
+    #[must_use]
+    pub fn receipt(receipt: &crate::delivery::Receipt, origin: NodeId) -> SignalBuilder {
+        SignalBuilder::new(SignalType::Receipt, "receipt")
+            .with_correlation(receipt.correlation_id)
+            .with_scope(PropagationScope::Targeted { destination: origin })
+            .with_payload(
+                serde_json::to_value(receipt).unwrap_or(serde_json::Value::Null),
+            )
     }
 
     /// Validate this signal according to the NTL specification.
@@ -272,7 +391,83 @@ impl Signal {
     }
 
     /// Maximum allowed signal size in bytes.
-    pub const MAX_SIZE: usize = 1_048_576; // 1 MB
+    pub const MAX_SIZE: usize = 1_048_576; // 1 MiB
+
+    /// Whether this signal requires its failures to be reported.
+    #[must_use]
+    pub fn requires_receipt(&self) -> bool {
+        self.delivery.requires_receipt()
+    }
+
+    /// Attenuate the weight for a hop, respecting the acknowledged floor.
+    ///
+    /// For an acknowledged signal the result is clamped at
+    /// `min_propagation_weight` while TTL remains: without the clamp a path
+    /// of more than a few hops guarantees a `below_threshold` rejection
+    /// regardless of routing quality, which would make the class unusable at
+    /// any distance.
+    pub fn attenuate_for_hop(&mut self, factor: f32, min_propagation_weight: f32) {
+        let attenuated = self.weight * factor;
+        self.weight = if self.requires_receipt() && self.ttl > 0 {
+            attenuated.max(min_propagation_weight)
+        } else {
+            attenuated
+        }
+        .clamp(0.0, 1.0);
+    }
+
+    /// Encode to CBOR for the wire.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::Serialization`] if encoding fails, or
+    /// [`crate::Error::InvalidSignal`] if the result exceeds
+    /// [`Self::MAX_SIZE`].
+    pub fn encode(&self) -> crate::Result<Vec<u8>> {
+        let bytes = serde_cbor::to_vec(self)
+            .map_err(|e| crate::Error::Serialization(e.to_string()))?;
+        if bytes.len() > Self::MAX_SIZE {
+            return Err(crate::Error::InvalidSignal(format!(
+                "encoded signal is {} bytes, exceeding the {} byte maximum",
+                bytes.len(),
+                Self::MAX_SIZE
+            )));
+        }
+        Ok(bytes)
+    }
+
+    /// Decode from CBOR.
+    ///
+    /// The size bound is checked *before* decoding: validation is ordered
+    /// cheapest-first so an attacker cannot impose expensive work with
+    /// malformed traffic.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::InvalidSignal`] if the input exceeds
+    /// [`Self::MAX_SIZE`], or [`crate::Error::Serialization`] if decoding
+    /// fails.
+    pub fn decode(bytes: &[u8]) -> crate::Result<Self> {
+        if bytes.len() > Self::MAX_SIZE {
+            return Err(crate::Error::InvalidSignal(format!(
+                "signal is {} bytes, exceeding the {} byte maximum",
+                bytes.len(),
+                Self::MAX_SIZE
+            )));
+        }
+        serde_cbor::from_slice(bytes).map_err(|e| crate::Error::Serialization(e.to_string()))
+    }
+
+    /// The bytes a signature covers: everything except the signature itself.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::Serialization`] if encoding fails.
+    pub fn signing_bytes(&self) -> crate::Result<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.signature = Vec::new();
+        // The trace grows as the signal travels, so it cannot be covered by
+        // an origin signature that must still verify downstream.
+        unsigned.trace = Vec::new();
+        serde_cbor::to_vec(&unsigned).map_err(|e| crate::Error::Serialization(e.to_string()))
+    }
 }
 
 impl SignalBuilder {
@@ -286,6 +481,7 @@ impl SignalBuilder {
             scope: PropagationScope::default(),
             correlation_id: None,
             tags: Vec::new(),
+            delivery: crate::delivery::DeliveryClass::BestEffort,
         }
     }
 
@@ -325,22 +521,47 @@ impl SignalBuilder {
     }
 
     /// Set searchable tags.
+    ///
+    /// Tags are visible to every node on the path. Do not put sensitive data
+    /// in them.
     #[must_use]
     pub fn with_tags(mut self, tags: Vec<&str>) -> Self {
         self.tags = tags.into_iter().map(String::from).collect();
         self
     }
 
-    /// Build the signal (without emitting — used for testing).
-    ///
-    /// Note: In production, use `.emit(&node)` instead, which handles
-    /// signing and network emission.
+    /// Set the delivery class.
     #[must_use]
-    pub fn build_unsigned(self, origin: NodeId) -> Signal {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+    pub fn with_delivery(mut self, delivery: crate::delivery::DeliveryClass) -> Self {
+        self.delivery = delivery;
+        self
+    }
+
+    /// Request at-least-once delivery with failure reporting.
+    ///
+    /// Has no effect on a `Receipt`, which is never itself acknowledged.
+    #[must_use]
+    pub fn acknowledged(mut self) -> Self {
+        if self.signal_type.can_be_acknowledged() {
+            self.delivery = crate::delivery::DeliveryClass::Acknowledged;
+        }
+        self
+    }
+
+    /// Build an unsigned signal with an explicit clock and randomness
+    /// source.
+    ///
+    /// The signal still needs signing before emission; see
+    /// [`crate::node::Node::emit`].
+    #[must_use]
+    pub fn build_unsigned_with(
+        self,
+        origin: NodeId,
+        clock: &dyn crate::time::Clock,
+        rng: &mut dyn crate::rng::Rng,
+    ) -> Signal {
+        let now = clock.now_ns();
+        let id = SignalId::generate(clock, rng);
 
         let mut tags = self.tags;
         if !self.topic.is_empty() {
@@ -348,7 +569,7 @@ impl SignalBuilder {
         }
 
         Signal {
-            id: SignalId::new(),
+            id,
             signal_type: self.signal_type,
             version: 1,
             origin,
@@ -362,31 +583,63 @@ impl SignalBuilder {
             correlation_id: self.correlation_id,
             trace: Vec::new(),
             tags,
+            delivery: self.delivery,
         }
     }
 
-    // TODO: pub async fn emit(self, node: &Node) -> crate::Result<Signal>
-    // This will be implemented when Node is complete — it signs the signal
-    // with the node's crypto module and emits it into the network.
+    /// Build an unsigned signal using the host clock and a seeded generator.
+    ///
+    /// Convenience for tests and binaries. Core logic should prefer
+    /// [`Self::build_unsigned_with`] so time and randomness stay injectable.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn build_unsigned(self, origin: NodeId) -> Signal {
+        use crate::time::Clock as _;
+        let clock = crate::time::SystemClock;
+        let mut rng = crate::rng::SplitMix64::from_identity(&origin.0, clock.now_ns());
+        self.build_unsigned_with(origin, &clock, &mut rng)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::rng::SplitMix64;
+    use crate::time::ManualClock;
+
     #[test]
     fn signal_id_is_unique() {
-        let a = SignalId::new();
-        let b = SignalId::new();
-        assert_ne!(a, b);
+        let clock = ManualClock::starting_at(1_700_000_000 * 1_000_000_000);
+        let mut rng = SplitMix64::seeded(1);
+        let a = SignalId::generate(&clock, &mut rng);
+        let b = SignalId::generate(&clock, &mut rng);
+        assert_ne!(
+            a, b,
+            "two ids from the same millisecond must still differ in randomness"
+        );
     }
 
     #[test]
     fn signal_id_is_time_ordered() {
-        let a = SignalId::new();
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let b = SignalId::new();
-        assert!(b.timestamp_ms() >= a.timestamp_ms());
+        // No sleeping: the injected clock makes ULID ordering directly
+        // assertable.
+        let clock = ManualClock::starting_at(1_700_000_000 * 1_000_000_000);
+        let mut rng = SplitMix64::seeded(2);
+        let a = SignalId::generate(&clock, &mut rng);
+        clock.advance_ns(5_000_000);
+        let b = SignalId::generate(&clock, &mut rng);
+        assert!(b.timestamp_ms() > a.timestamp_ms());
+        assert!(
+            b.to_string() > a.to_string(),
+            "ULIDs must sort lexicographically by emission time"
+        );
+    }
+
+    #[test]
+    fn signal_id_bytes_roundtrip() {
+        let id = SignalId::from_parts(1_700_000_000_123, 42);
+        assert_eq!(SignalId::from_bytes(id.to_bytes()), id);
     }
 
     #[test]
@@ -448,18 +701,18 @@ mod tests {
 
     #[test]
     fn signal_type_byte_roundtrip() {
-        let types = vec![
+        let types: Vec<SignalType> = vec![
             SignalType::Data,
             SignalType::Query,
             SignalType::Event,
             SignalType::Command,
             SignalType::Heartbeat,
             SignalType::Discovery,
-            SignalType::Ack,
+            SignalType::Receipt,
         ];
         for t in types {
             let byte = t.to_type_byte();
-            let parsed = SignalType::from_type_byte(byte).unwrap();
+            let parsed = SignalType::from_type_byte(byte).expect("known type must parse");
             assert_eq!(t, parsed);
         }
     }

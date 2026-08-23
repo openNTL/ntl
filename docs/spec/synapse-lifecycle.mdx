@@ -44,6 +44,43 @@ Two nodes form a synapse through a three-step handshake:
 
 The handshake MUST complete within 30 seconds or be abandoned.
 
+## Eligibility to Carry Signals
+
+A synapse may be chosen to carry a signal if and only if its state is
+**Active** or **Weakening**.
+
+| State | May carry signals | Why |
+|---|---|---|
+| Forming | No | Handshake incomplete |
+| Active | Yes | — |
+| **Weakening** | **Yes** | Below the active threshold but *still connected* |
+| Dormant | No | Connection idle; must be reactivated first |
+| Pruned | No | Terminal |
+
+Including `Weakening` is normative, and it is a correctness requirement
+rather than a tuning preference. A synapse regains weight only by carrying
+traffic that then succeeds ([learning-model](/spec/learning-model) §2). A
+state that is reachable from a single negative outcome *and* ineligible for
+traffic is therefore a one-way trap — the synapse can never earn its way
+back.
+
+With `initial_weight` at `0.1` and the Active threshold also at `0.1`, every
+newly formed synapse sits exactly on that boundary: one rejection would drop
+it to `Weakening`. An implementation that filtered candidates on
+`state == Active` would permanently exclude any peer that failed once, and
+routing would ossify around whichever peers happened to succeed first — the
+precise failure that [learning-model](/spec/learning-model) §4 exists to
+prevent.
+
+<Warning>
+Filtering routing candidates on `state == Active` is a conformance
+violation. Filter on eligibility.
+</Warning>
+
+`Dormant` is genuinely unavailable: the connection is idle and must be
+reactivated before it can carry anything. That is a different situation from
+a live connection with a low weight.
+
 ## Weight Management
 
 ### Initial Weight

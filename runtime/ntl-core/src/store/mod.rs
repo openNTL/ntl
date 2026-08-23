@@ -148,11 +148,28 @@ pub struct SynapseFilter {
 }
 
 impl SynapseFilter {
-    /// Filter matching only synapses eligible to carry signals.
+    /// Filter matching only synapses in the `Active` state.
+    ///
+    /// For routing candidates prefer [`Self::eligible`]: a `Weakening`
+    /// synapse is still connected and must remain able to earn its weight
+    /// back.
     #[must_use]
     pub fn active() -> Self {
         Self {
             states: vec![SynapseState::Active],
+            ..Self::default()
+        }
+    }
+
+    /// Filter matching every synapse that may carry a signal.
+    ///
+    /// Includes `Weakening` as well as `Active` — see
+    /// [`SynapseState::can_carry`] for why excluding it would make weight
+    /// recovery impossible.
+    #[must_use]
+    pub fn eligible() -> Self {
+        Self {
+            states: vec![SynapseState::Active, SynapseState::Weakening],
             ..Self::default()
         }
     }

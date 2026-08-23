@@ -37,6 +37,13 @@ fn node(n: u8) -> NodeId {
     NodeId(vec![n; 32])
 }
 
+/// Deterministic identifier factory.
+///
+/// The suite avoids ambient randomness so a failure reproduces exactly.
+fn signal_id(n: u64) -> SignalId {
+    SignalId::from_parts(1_700_000_000_000 + n, u128::from(n) << 64)
+}
+
 fn synapse_record(id: &str, peer: u8, weight: f32) -> SynapseRecord {
     SynapseRecord {
         id: SynapseId(id.to_string()),
@@ -245,7 +252,7 @@ fn peer_roundtrip(store: &dyn NodeStore) {
 /// Deduplication must be an atomic check-and-set: the first call reports
 /// unseen, every later call within the TTL reports seen.
 fn dedup_is_check_and_set(store: &dyn NodeStore) {
-    let id = SignalId::new();
+    let id = signal_id(101);
     let now = 100 * SEC;
 
     assert!(
@@ -266,7 +273,7 @@ fn dedup_is_check_and_set(store: &dyn NodeStore) {
         "has_seen must agree with check_and_set_seen"
     );
 
-    let other = SignalId::new();
+    let other = signal_id(102);
     assert!(
         !store.has_seen(&other, now).expect("has_seen"),
         "has_seen must not report an unrecorded signal as seen"
@@ -280,7 +287,7 @@ fn dedup_is_check_and_set(store: &dyn NodeStore) {
 /// Entries must stop counting as seen once their TTL elapses, and a purge
 /// must reclaim them.
 fn dedup_entries_expire(store: &dyn NodeStore) {
-    let id = SignalId::new();
+    let id = signal_id(103);
     let now = 1_000 * SEC;
     let ttl_secs = 60;
 
@@ -341,7 +348,7 @@ fn activation_roundtrip(store: &dyn NodeStore) {
 /// A decision must be appended with an assigned id, findable while pending,
 /// and resolvable.
 fn journal_roundtrip(store: &dyn NodeStore) {
-    let signal = SignalId::new();
+    let signal = signal_id(104);
     let entry = decision(signal, 40, 10 * SEC);
 
     let id = store.append_decision(&entry).expect("append");
@@ -397,7 +404,7 @@ fn journal_roundtrip(store: &dyn NodeStore) {
 /// The first receipt wins. This is what makes at-least-once delivery safe to
 /// retry.
 fn journal_resolution_is_idempotent(store: &dyn NodeStore) {
-    let signal = SignalId::new();
+    let signal = signal_id(105);
     let id = store
         .append_decision(&decision(signal, 41, 20 * SEC))
         .expect("append");
@@ -425,8 +432,8 @@ fn journal_resolution_is_idempotent(store: &dyn NodeStore) {
 /// Decisions past their deadline must be discoverable so silence can be
 /// converted into a negative reward.
 fn journal_timeout_sweep(store: &dyn NodeStore) {
-    let stale = SignalId::new();
-    let fresh = SignalId::new();
+    let stale = signal_id(106);
+    let fresh = signal_id(107);
     let stale_id = store
         .append_decision(&decision(stale, 42, 30 * SEC))
         .expect("append stale");
@@ -520,7 +527,7 @@ fn meta_roundtrip(store: &dyn NodeStore) {
 
 /// History must either work or refuse — never silently discard.
 fn signal_history_is_consistent(store: &dyn NodeStore) {
-    let id = SignalId::new();
+    let id = signal_id(108);
     let body = b"signal body";
     let result = store.put_signal_history(&id, body, 1_000);
 
