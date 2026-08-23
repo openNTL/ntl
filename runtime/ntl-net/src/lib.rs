@@ -40,11 +40,7 @@ pub fn open_store(config: &ntl_core::config::StorageConfig) -> Result<Arc<dyn No
             Ok(Arc::new(store))
         }
         StorageConfig::Memory => Ok(Arc::new(ntl_core::store::MemoryStore::new())),
-        StorageConfig::Postgres { .. } => Err(
-            "the PostgreSQL backend is not implemented yet; use sqlite or memory. \
-             See https://openntl.org/guides/storage-backends"
-                .to_string(),
-        ),
+        StorageConfig::Postgres { .. } => Err(ntl_store_postgres::UNIMPLEMENTED.to_string()),
     }
 }
 

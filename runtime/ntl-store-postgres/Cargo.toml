@@ -1,0 +1,19 @@
+[package]
+name = "ntl-store-postgres"
+description = "PostgreSQL storage backend for the Neural Transfer Layer (not yet implemented)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+# Not published while unimplemented: a crate on crates.io that looks like a
+# working backend and is not would cost more than the reserved name is worth.
+publish = false
+
+[dependencies]
+ntl-core.workspace = true
+
+[lints]
+workspace = true

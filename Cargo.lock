@@ -937,6 +937,7 @@ name = "ntl-net"
 version = "0.1.0"
 dependencies = [
  "ntl-core",
+ "ntl-store-postgres",
  "ntl-store-sqlite",
  "rand 0.8.7",
  "serde",
@@ -957,6 +958,13 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ntl-store-postgres"
+version = "0.1.0"
+dependencies = [
+ "ntl-core",
 ]
 
 [[package]]
