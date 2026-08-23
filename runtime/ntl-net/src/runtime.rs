@@ -183,6 +183,15 @@ impl Runtime {
             .with_config(config.node)
             .with_identity(identity.node_id.clone())
             .with_store(store)
+            // Not the default `SplitMix64`. That generator supplies signal
+            // identifiers as well as exploration draws, it is seeded from the
+            // node id — which is public, being in every signal's `origin` —
+            // and its output function is invertible, so one observed
+            // identifier recovers the state and predicts every later one.
+            // `rng.rs` says outright that it must not be used for identifiers
+            // that need unpredictability. See `csprng` for the attack that
+            // buys.
+            .with_rng(Box::new(crate::csprng::OsBackedRng::from_os()))
             .build()
             .map_err(|e| RuntimeError::Node(e.to_string()))?;
 
@@ -476,13 +485,32 @@ async fn run_session(
     let peer = handshake(&reader, &writer, &node, &identity).await?;
 
     let (tx, mut rx) = mpsc::channel::<Signal>(PEER_QUEUE_DEPTH);
-    sessions.write().await.insert(
-        peer.node_id.clone(),
-        Session {
-            outbound: tx,
-            public_key: peer.public_key.clone(),
-        },
-    );
+    {
+        // Refuse rather than replace. `insert` returned the old `Sender` and
+        // dropped it, which tore down the existing session's writer pump — so a
+        // second connection claiming an identity silently displaced the first,
+        // and every signal routed to that peer went to the newcomer instead.
+        // With authentication now proven per connection this is no longer an
+        // impersonation route, but "last connection wins" is still the wrong
+        // default: a live session is working, and a reconnect that races a
+        // half-closed socket should not cost the traffic in flight.
+        let mut guard = sessions.write().await;
+        if let Some(existing) = guard.get(&peer.node_id) {
+            if !existing.outbound.is_closed() {
+                return Err(RuntimeError::Handshake(format!(
+                    "{} already has a live session; refusing the duplicate",
+                    peer.node_id
+                )));
+            }
+        }
+        guard.insert(
+            peer.node_id.clone(),
+            Session {
+                outbound: tx,
+                public_key: peer.public_key.clone(),
+            },
+        );
+    }
     let _ = events
         .send(Event::PeerConnected {
             peer: peer.node_id.clone(),
@@ -525,50 +553,139 @@ struct PeerIdentity {
     public_key: PublicKey,
 }
 
+/// Bytes of challenge each side sends. 256 bits, from the OS CSPRNG.
+const CHALLENGE_LEN: usize = 32;
+
+/// How long the whole exchange may take.
+///
+/// [synapse-lifecycle](https://openntl.org/spec/synapse-lifecycle) requires the
+/// handshake to complete within 30 seconds or be abandoned. Without this a peer
+/// that connects and then says nothing holds a task and a socket indefinitely.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Read one framed signal, or time out.
+async fn read_handshake_frame(
+    reader: &Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
+    what: &str,
+) -> Result<Signal, RuntimeError> {
+    let read = async {
+        let mut guard = reader.lock().await;
+        frame::read_signal(&mut *guard)
+            .await
+            .map_err(RuntimeError::Frame)
+    };
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, read)
+        .await
+        .map_err(|_| RuntimeError::Handshake(format!("timed out waiting for the peer's {what}")))?
+}
+
+/// Sign and send one framed signal.
+async fn write_handshake_frame(
+    writer: &Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
+    node: &Arc<Node>,
+    identity: &Arc<Identity>,
+    payload: serde_json::Value,
+) -> Result<(), RuntimeError> {
+    let mut signal = node
+        .emit(Signal::discovery().with_payload(payload))
+        .map_err(|e| RuntimeError::Node(e.to_string()))?;
+    ntl_core::crypto::sign_signal(&ClassicalModule, &mut signal, &identity.private)
+        .map_err(|e| RuntimeError::Crypto(e.to_string()))?;
+    let mut guard = writer.lock().await;
+    frame::write_signal(&mut *guard, &signal)
+        .await
+        .map_err(RuntimeError::Frame)
+}
+
+/// Read a byte string out of a handshake payload.
+fn payload_bytes(signal: &Signal, field: &str) -> Result<Vec<u8>, RuntimeError> {
+    signal
+        .payload
+        .get(field)
+        .and_then(|v| serde_json::from_value::<Vec<u8>>(v.clone()).ok())
+        .ok_or_else(|| RuntimeError::Handshake(format!("handshake has no {field}")))
+}
+
+/// Check a handshake frame is a signed Discovery from `expected`.
+fn verify_handshake_frame(
+    signal: &Signal,
+    key: &PublicKey,
+    expected: &NodeId,
+    what: &str,
+) -> Result<(), RuntimeError> {
+    if signal.signal_type != SignalType::Discovery {
+        return Err(RuntimeError::Handshake(format!(
+            "expected a Discovery signal for the {what}, got {:?}",
+            signal.signal_type
+        )));
+    }
+    if signal.origin != *expected {
+        return Err(RuntimeError::Handshake(format!(
+            "the {what} came from a different identity than the hello"
+        )));
+    }
+    if !ntl_core::crypto::verify_signal(&ClassicalModule, signal, key)
+        .map_err(|e| RuntimeError::Crypto(e.to_string()))?
+    {
+        return Err(RuntimeError::Handshake(format!(
+            "the {what} signature did not verify"
+        )));
+    }
+    Ok(())
+}
+
+/// Authenticate a peer over this connection.
+///
+/// Three messages, mutually: both sides send a signed hello carrying their
+/// public key and a fresh random challenge, then both send a signed proof whose
+/// payload echoes the *peer's* challenge. This matches the SYN / SYN-ACK / ACK
+/// exchange [synapse-lifecycle](https://openntl.org/spec/synapse-lifecycle)
+/// specifies, and the proof is what makes it an authentication rather than a
+/// bearer token.
+///
+/// The earlier version verified only the hello, which was self-contained,
+/// non-expiring and replayable — so it proved that *someone* had once held the
+/// private key, not that the party on this socket holds it now. Worse, a node
+/// writes its hello before reading the peer's, so anyone able to open a TCP
+/// connection could collect a node's valid signed hello and replay it verbatim
+/// elsewhere. Because a session is keyed on the claimed `NodeId` and
+/// `upsert_synapse` returns the existing record, a replayer would have
+/// displaced the genuine peer's session and inherited its learned weight, and
+/// could then have had signature-failure penalties charged to that peer's
+/// synapse — which threat-model §4 promises is impossible.
+///
+/// Harvesting a hello is now harmless: it carries a challenge the harvester
+/// cannot make anyone answer, and answering a fresh one needs the private key.
 async fn handshake(
     reader: &Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
     writer: &Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
     node: &Arc<Node>,
     identity: &Arc<Identity>,
 ) -> Result<PeerIdentity, RuntimeError> {
-    // Announce ourselves.
-    let mut hello = node
-        .emit(Signal::discovery().with_payload(serde_json::json!({
+    // Our challenge. From the OS CSPRNG, not the node's sampling generator:
+    // a predictable challenge is a replayable one.
+    let mut challenge = [0u8; CHALLENGE_LEN];
+    {
+        use rand::RngCore as _;
+        rand::rngs::OsRng.fill_bytes(&mut challenge);
+    }
+
+    // SYN. Both sides send without waiting, so neither blocks on the other.
+    write_handshake_frame(
+        writer,
+        node,
+        identity,
+        serde_json::json!({
             "public_key": identity.public.0,
             "module": ClassicalModule::ID,
-        })))
-        .map_err(|e| RuntimeError::Node(e.to_string()))?;
-    ntl_core::crypto::sign_signal(&ClassicalModule, &mut hello, &identity.private)
-        .map_err(|e| RuntimeError::Crypto(e.to_string()))?;
+            "challenge": challenge,
+        }),
+    )
+    .await?;
 
-    {
-        let mut guard = writer.lock().await;
-        frame::write_signal(&mut *guard, &hello)
-            .await
-            .map_err(RuntimeError::Frame)?;
-    }
+    let their_hello = read_handshake_frame(reader, "hello").await?;
 
-    // Await theirs.
-    let their_hello = {
-        let mut guard = reader.lock().await;
-        frame::read_signal(&mut *guard)
-            .await
-            .map_err(RuntimeError::Frame)?
-    };
-
-    if their_hello.signal_type != SignalType::Discovery {
-        return Err(RuntimeError::Handshake(format!(
-            "expected a Discovery signal, got {:?}",
-            their_hello.signal_type
-        )));
-    }
-
-    let key_bytes: Vec<u8> = their_hello
-        .payload
-        .get("public_key")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .ok_or_else(|| RuntimeError::Handshake("no public key in handshake".to_string()))?;
-    let public_key = PublicKey(key_bytes);
+    let public_key = PublicKey(payload_bytes(&their_hello, "public_key")?);
 
     // The claimed identity must match the key that signed the handshake.
     // Without this check a peer could claim any identity it liked, and
@@ -579,11 +696,49 @@ async fn handshake(
             "claimed identity does not match the handshake public key".to_string(),
         ));
     }
-    if !ntl_core::crypto::verify_signal(&ClassicalModule, &their_hello, &public_key)
-        .map_err(|e| RuntimeError::Crypto(e.to_string()))?
-    {
+    verify_handshake_frame(&their_hello, &public_key, &derived, "hello")?;
+
+    // A node must not form a synapse with itself. Reflecting a node's own
+    // hello back at it otherwise passed every check — the identity binding
+    // holds and the signature is genuine — and left the node with a session
+    // and an active synapse under its own identity, routing its own traffic to
+    // whoever held the socket.
+    if derived == identity.node_id {
         return Err(RuntimeError::Handshake(
-            "handshake signature did not verify".to_string(),
+            "the peer presented this node's own identity".to_string(),
+        ));
+    }
+
+    let their_challenge = payload_bytes(&their_hello, "challenge")?;
+    if their_challenge.len() != CHALLENGE_LEN {
+        return Err(RuntimeError::Handshake(format!(
+            "challenge is {} bytes, expected {CHALLENGE_LEN}",
+            their_challenge.len()
+        )));
+    }
+
+    // ACK. Signing a payload that contains the peer's fresh random challenge
+    // proves possession of the private key *now*, over this connection.
+    write_handshake_frame(
+        writer,
+        node,
+        identity,
+        serde_json::json!({ "proof_for": their_challenge }),
+    )
+    .await?;
+
+    let their_proof = read_handshake_frame(reader, "proof").await?;
+    verify_handshake_frame(&their_proof, &public_key, &derived, "proof")?;
+
+    let echoed = payload_bytes(&their_proof, "proof_for")?;
+    // Constant time is not required — a challenge is public once sent, and the
+    // secret being proven is the signing key, not the challenge — but the
+    // comparison must be exact.
+    if echoed != challenge {
+        return Err(RuntimeError::Handshake(
+            "the peer's proof did not echo our challenge, so it did not \
+             demonstrate possession of the key it claimed"
+                .to_string(),
         ));
     }
 
@@ -660,7 +815,7 @@ async fn read_loop(
         // The price is that verified delivery is one hop today: a signal
         // relayed from a node we have never met has no resolvable key. Fixing
         // that needs key distribution, which is a wire-format question rather
-        // than a bug — see threat-model §8.
+        // than a bug — see threat-model §9.
         let Some(key) = origin_key else {
             let _ = events
                 .send(Event::OriginKeyUnknown {
@@ -1010,7 +1165,7 @@ async fn forward_signal(
 /// than not sending: the caller believed the sender had been told.
 ///
 /// Receipts are consequently one hop, the same bound and for the same reason
-/// as signature verification — see threat-model §8.
+/// as signature verification — see threat-model §9.
 async fn send_receipt_to(
     node: &Arc<Node>,
     identity: &Arc<Identity>,

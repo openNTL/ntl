@@ -18,6 +18,17 @@
 //! next draw learns only which path a node probes next. It MUST NOT be used
 //! for key generation, nonces, or signal identifiers that need
 //! unpredictability — those go through [`crate::crypto`].
+//!
+//! This is not a hypothetical. The node builder used to default to
+//! `SplitMix64::from_identity`, which supplied the ULID randomness for every
+//! signal the node emitted. The seed is the node id, which appears in the
+//! `origin` field of every signal; the output function is a bijection on 64
+//! bits; and a ULID carries 80 bits of randomness, so a *single* observed
+//! identifier recovered the state and predicted every later one. Since
+//! identifiers are the network's deduplication key, that let an attacker
+//! suppress a node's traffic before it was sent. See
+//! [threat-model](https://openntl.org/spec/threat-model) §8, and
+//! `ntl-net`'s `csprng` module for the generator the runtime injects instead.
 
 /// A source of pseudo-randomness for routing decisions.
 pub trait Rng: Send {

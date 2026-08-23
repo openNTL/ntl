@@ -57,29 +57,73 @@ struct RawPeer {
 }
 
 impl RawPeer {
-    /// Connect and complete the Discovery handshake honestly.
+    /// Connect and complete the three-message Discovery handshake honestly.
+    ///
+    /// SYN / SYN-ACK / ACK: both sides send a signed hello carrying a public
+    /// key and a fresh challenge, then both send a signed proof echoing the
+    /// peer's challenge. The proof is what makes the exchange an
+    /// authentication rather than a replayable bearer token, so a helper that
+    /// skipped it would not be exercising the real path.
     async fn connect(addr: SocketAddr, seed: u8) -> Self {
         let (public, private, node_id) = keys(seed);
         let mut stream = TcpStream::connect(addr).await.expect("connect");
 
-        // The node speaks first on an inbound connection, so read its hello
-        // before sending ours. Order does not actually matter to the protocol,
-        // but draining it keeps the socket from filling behind us.
-        let their_hello = ntl_net::frame::read_signal(&mut stream)
-            .await
-            .expect("their hello");
-        assert_eq!(their_hello.signal_type, SignalType::Discovery);
+        // Both sides send their hello without waiting, so read order is free.
+        let mut challenge = [0u8; 32];
+        for (i, b) in challenge.iter_mut().enumerate() {
+            *b = seed ^ u8::try_from(i).unwrap_or(0);
+        }
 
         let mut hello = Signal::discovery()
             .with_payload(serde_json::json!({
                 "public_key": public.0,
                 "module": ClassicalModule::ID,
+                "challenge": challenge,
             }))
             .build_unsigned(node_id.clone());
         ntl_core::crypto::sign_signal(&ClassicalModule, &mut hello, &private).expect("sign hello");
         ntl_net::frame::write_signal(&mut stream, &hello)
             .await
             .expect("write hello");
+
+        let their_hello = ntl_net::frame::read_signal(&mut stream)
+            .await
+            .expect("their hello");
+        assert_eq!(their_hello.signal_type, SignalType::Discovery);
+        let their_challenge: Vec<u8> = serde_json::from_value(
+            their_hello
+                .payload
+                .get("challenge")
+                .expect("the node must issue a challenge")
+                .clone(),
+        )
+        .expect("challenge bytes");
+        assert_eq!(their_challenge.len(), 32);
+
+        let mut proof = Signal::discovery()
+            .with_payload(serde_json::json!({ "proof_for": their_challenge }))
+            .build_unsigned(node_id.clone());
+        ntl_core::crypto::sign_signal(&ClassicalModule, &mut proof, &private).expect("sign proof");
+        ntl_net::frame::write_signal(&mut stream, &proof)
+            .await
+            .expect("write proof");
+
+        let their_proof = ntl_net::frame::read_signal(&mut stream)
+            .await
+            .expect("their proof");
+        let echoed: Vec<u8> = serde_json::from_value(
+            their_proof
+                .payload
+                .get("proof_for")
+                .expect("the node must answer our challenge")
+                .clone(),
+        )
+        .expect("proof bytes");
+        assert_eq!(
+            echoed,
+            challenge.to_vec(),
+            "the node must echo our challenge, not some other value"
+        );
 
         Self {
             stream,
@@ -439,4 +483,209 @@ async fn a_signal_released_by_the_latency_guard_is_still_forwarded() {
         received.trace.contains(&relay.identity().node_id),
         "the relay must appear in the trace of what it forwarded"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Handshake authentication.
+//
+// The exchange used to be a single signed hello: self-contained, non-expiring
+// and replayable. It proved someone had once held the private key, not that
+// the party on this socket holds it. And a node writes its hello before
+// reading the peer's, so the hello was harvestable by anyone able to open a
+// TCP connection.
+// ---------------------------------------------------------------------------
+
+/// Read a node's hello without answering it — what an attacker harvests.
+async fn harvest_hello(addr: SocketAddr) -> Signal {
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let hello = ntl_net::frame::read_signal(&mut stream)
+        .await
+        .expect("a node offers its hello to anyone who connects");
+    assert_eq!(hello.signal_type, SignalType::Discovery);
+    hello
+}
+
+#[tokio::test]
+async fn a_replayed_hello_does_not_authenticate() {
+    // Victim and the peer whose identity gets stolen.
+    let (victim, victim_addr, mut events) = start_node().await;
+    let (_target, target_addr, _target_events) = start_node().await;
+
+    // Step 1: harvest the target's signed hello. No key material needed — the
+    // node hands it to any connection.
+    let stolen = harvest_hello(target_addr).await;
+    let stolen_identity = stolen.origin.clone();
+
+    // Step 2: replay it verbatim at the victim.
+    let mut attacker = TcpStream::connect(victim_addr).await.expect("connect");
+    let _their_hello = ntl_net::frame::read_signal(&mut attacker)
+        .await
+        .expect("the victim's hello");
+    ntl_net::frame::write_signal(&mut attacker, &stolen)
+        .await
+        .expect("write the stolen hello");
+
+    // The identity binding holds and the signature is genuine, so everything
+    // the old handshake checked passes. What the attacker cannot do is answer
+    // the victim's fresh challenge, so no session is ever established.
+    let connected = victim.wait_for_peers(1, Duration::from_secs(2)).await;
+    assert_eq!(
+        connected, 0,
+        "a replayed hello must not produce a session — it proves possession of \
+         a key at some point in the past, not now"
+    );
+    assert!(
+        !victim.connected_peers().await.contains(&stolen_identity),
+        "the attacker must not hold a session under the stolen identity"
+    );
+
+    let seen = drain(&mut events, Duration::from_millis(200)).await;
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, Event::PeerConnected { .. })),
+        "no peer should have connected, saw {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_node_refuses_its_own_reflected_hello() {
+    // The degenerate case, needing no third party: echo a node's own hello
+    // back at it. The identity binding holds — it is the node's own key — and
+    // the signature is genuinely the node's. The old handshake accepted it and
+    // formed an active synapse under the node's own identity, after which the
+    // node would route its own traffic to whoever held the socket.
+    let (node, addr, mut events) = start_node().await;
+    let own_identity = node.identity().node_id.clone();
+
+    let mut attacker = TcpStream::connect(addr).await.expect("connect");
+
+    // Reflect *everything*. The node's hello carries its own challenge, so the
+    // proof it then sends answers that challenge — and reflecting the proof
+    // back satisfies the echo check perfectly. Nothing but the self-identity
+    // check stands between this and a synapse to self, which is why the mirror
+    // attack has to be refused by identity rather than by the challenge.
+    let its_own_hello = ntl_net::frame::read_signal(&mut attacker)
+        .await
+        .expect("the node's hello");
+    ntl_net::frame::write_signal(&mut attacker, &its_own_hello)
+        .await
+        .expect("reflect the hello");
+
+    // The node may already have hung up on the identity check; if it has not,
+    // reflect its proof as well so the mirror is complete.
+    if let Ok(Ok(its_own_proof)) = tokio::time::timeout(
+        Duration::from_secs(2),
+        ntl_net::frame::read_signal(&mut attacker),
+    )
+    .await
+    {
+        let _ = ntl_net::frame::write_signal(&mut attacker, &its_own_proof).await;
+    }
+
+    assert_eq!(
+        node.wait_for_peers(1, Duration::from_secs(2)).await,
+        0,
+        "a node must not form a session with itself"
+    );
+    assert!(
+        !node.connected_peers().await.contains(&own_identity),
+        "and certainly not under its own identity"
+    );
+    let seen = drain(&mut events, Duration::from_millis(200)).await;
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, Event::PeerConnected { .. }))
+    );
+
+    // The synapse table must be untouched too: a self-synapse would be
+    // selected as a routing candidate.
+    let synapses = node
+        .node()
+        .store()
+        .list_synapses(&ntl_core::store::SynapseFilter::eligible())
+        .expect("store");
+    assert!(
+        !synapses.iter().any(|s| s.peer == own_identity),
+        "no synapse to self"
+    );
+}
+
+#[tokio::test]
+async fn a_proof_that_echoes_the_wrong_challenge_is_refused() {
+    // A peer that holds a real key but answers a challenge of its own choosing
+    // rather than the one it was issued. This is what a relayed or
+    // man-in-the-middle proof looks like.
+    let (node, addr, mut events) = start_node().await;
+    let (public, private, node_id) = keys(21);
+
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let mut hello = Signal::discovery()
+        .with_payload(serde_json::json!({
+            "public_key": public.0,
+            "module": ClassicalModule::ID,
+            "challenge": vec![7u8; 32],
+        }))
+        .build_unsigned(node_id.clone());
+    ntl_core::crypto::sign_signal(&ClassicalModule, &mut hello, &private).expect("sign");
+    ntl_net::frame::write_signal(&mut stream, &hello)
+        .await
+        .expect("write hello");
+    let _their_hello = ntl_net::frame::read_signal(&mut stream)
+        .await
+        .expect("their hello");
+
+    // Correctly signed, wrong content: it echoes a challenge the node never
+    // issued.
+    let mut proof = Signal::discovery()
+        .with_payload(serde_json::json!({ "proof_for": vec![9u8; 32] }))
+        .build_unsigned(node_id.clone());
+    ntl_core::crypto::sign_signal(&ClassicalModule, &mut proof, &private).expect("sign");
+    ntl_net::frame::write_signal(&mut stream, &proof)
+        .await
+        .expect("write proof");
+
+    assert_eq!(
+        node.wait_for_peers(1, Duration::from_secs(2)).await,
+        0,
+        "a proof must answer the challenge this node issued"
+    );
+    let seen = drain(&mut events, Duration::from_millis(200)).await;
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, Event::PeerConnected { .. }))
+    );
+}
+
+#[tokio::test]
+async fn a_second_connection_does_not_displace_a_live_session() {
+    // `sessions.insert` returned the old sender and dropped it, tearing down
+    // the existing writer pump — so a second connection claiming an identity
+    // silently took over every signal routed to that peer.
+    let (node, addr, _events) = start_node().await;
+    let first = RawPeer::connect(addr, 30).await;
+    assert_eq!(node.wait_for_peers(1, Duration::from_secs(5)).await, 1);
+
+    // A second connection with the *same* key. It can answer the challenge —
+    // it holds the key — so this is not an impersonation, just a duplicate.
+    let second = RawPeer::connect(addr, 30).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert_eq!(
+        node.connected_peers().await.len(),
+        1,
+        "one identity, one session"
+    );
+
+    // And the original is the one still standing: it must still be able to
+    // deliver a signal.
+    let mut first = first;
+    let mut signal = Signal::data("still-here")
+        .with_weight(0.9)
+        .build_unsigned(first.node_id.clone());
+    ntl_core::crypto::sign_signal(&ClassicalModule, &mut signal, &first.private).expect("sign");
+    first.send(&signal).await;
+    drop(second);
 }

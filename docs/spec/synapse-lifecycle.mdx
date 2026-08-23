@@ -38,11 +38,43 @@ FORMING ──▶ ACTIVE ──▶ WEAKENING ──▶ DORMANT ──▶ PRUNED
 
 Two nodes form a synapse through a three-step handshake:
 
-1. **SYN** — Initiating node sends identity, capabilities, and supported crypto modules
-2. **SYN-ACK** — Responding node confirms, sends its own identity and selects crypto module
-3. **ACK** — Initiating node confirms, synapse enters ACTIVE state
+1. **SYN** — Initiating node sends identity, capabilities, supported crypto
+   modules, and a **fresh random challenge**
+2. **SYN-ACK** — Responding node confirms, sends its own identity, its own
+   challenge, and a signature over the initiator's challenge
+3. **ACK** — Initiating node signs the responder's challenge; the synapse
+   enters ACTIVE state
 
 The handshake MUST complete within 30 seconds or be abandoned.
+
+### The Challenge Is Not Optional
+
+A node MUST verify that the peer signed **the challenge this node just
+issued**, and that challenge MUST come from a cryptographically secure
+generator. Three requirements follow, each of which an implementation can get
+wrong while still appearing to authenticate:
+
+- **A signed hello alone is not authentication.** It is self-contained and
+  replayable, so it proves that someone once held the private key — not that
+  the party on this connection holds it. Since a node announces itself to any
+  connection, such a hello can be collected by anyone able to open a socket and
+  replayed elsewhere.
+- **A node MUST refuse a peer presenting its own identity.** Reflecting a
+  node's own messages back at it satisfies every other check — the identity
+  binding holds, the signatures are genuine, and a reflected proof answers the
+  node's own challenge — yet leaves the node with a session and an active
+  synapse under its own identity, routing its own traffic to whoever holds the
+  socket.
+- **A node SHOULD refuse a second session for an identity that already has a
+  live one**, rather than replacing it. Replacement means the most recent
+  connection captures everything routed to that peer.
+
+The consequences of getting this wrong are not confined to the connection.
+Sessions are keyed by identity, and a synapse's learned weight belongs to the
+identity, so an accepted impostor inherits the weight the genuine peer earned —
+and any signature-failure penalty it then incurs is charged to the genuine
+peer's synapse, which [threat-model](/spec/threat-model) §4 states is not
+possible.
 
 ## Eligibility to Carry Signals
 

@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bin_support;
+pub mod csprng;
 pub mod frame;
 pub mod identity;
 pub mod runtime;
