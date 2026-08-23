@@ -55,7 +55,7 @@ pub trait Rng: Send {
     }
 }
 
-/// SplitMix64 — a small, fast, well-distributed generator.
+/// `SplitMix64` — a small, fast, well-distributed generator.
 ///
 /// Chosen because it is a dozen lines with no dependencies, has a full
 /// 2^64 period, and passes the standard statistical batteries. Every NTL

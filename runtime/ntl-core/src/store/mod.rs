@@ -7,8 +7,8 @@
 //!
 //! | Crate | Backend | Deployment class |
 //! |---|---|---|
-//! | `ntl-store-sqlite` | SQLite | Edge nodes (default) |
-//! | `ntl-store-postgres` | PostgreSQL | Full nodes |
+//! | `ntl-store-sqlite` | `SQLite` | Edge nodes (default) |
+//! | `ntl-store-postgres` | `PostgreSQL` | Full nodes |
 //! | — | Graph or KV stores | Ecosystem |
 //!
 //! The normative contract is [spec/storage-interface][spec]. This module is
@@ -20,9 +20,9 @@
 //!
 //! `ntl-core` makes no runtime assumptions — it carries no async executor and
 //! must build for `wasm32-unknown-unknown`. A synchronous trait keeps that
-//! promise and matches the backends that matter most: SQLite's API is
+//! promise and matches the backends that matter most: `SQLite`'s API is
 //! blocking, and an edge node has no thread pool to spare. Backends whose
-//! driver is async (PostgreSQL) wrap their calls in a blocking pool; see
+//! driver is async (`PostgreSQL`) wrap their calls in a blocking pool; see
 //! `ntl-store-postgres` for the pattern.
 //!
 //! Every method takes `&self` rather than `&mut self` so a store can be
@@ -302,7 +302,19 @@ pub struct JournalEntry {
     /// The peer on the far end at decision time.
     pub peer: NodeId,
     /// Score the propagation engine assigned this path.
+    ///
+    /// Records *why* the path was chosen. Distinct from `signal_weight`:
+    /// the score is a composite of weight, affinity, latency, and recency,
+    /// whereas `signal_weight` is the carried signal's own priority.
     pub score: f32,
+    /// Weight of the signal that was carried.
+    ///
+    /// The reward rule scales by this (`Δw = η · r · x`), so a low-weight
+    /// signal teaches less — which is what stops influence being bought
+    /// cheaply by flooding negligible traffic. It must be recorded at
+    /// decision time, because by the time a receipt arrives the signal is
+    /// gone.
+    pub signal_weight: f32,
     /// Whether this choice came from exploration rather than exploitation.
     ///
     /// Exploration decisions are the ones that carry information about paths

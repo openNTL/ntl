@@ -35,9 +35,9 @@ impl<'de> Deserialize<'de> for SignalId {
             }
 
             fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<SignalId, E> {
-                let bytes: [u8; 16] = v.try_into().map_err(|_| {
-                    E::invalid_length(v.len(), &"exactly 16 bytes")
-                })?;
+                let bytes: [u8; 16] = v
+                    .try_into()
+                    .map_err(|_| E::invalid_length(v.len(), &"exactly 16 bytes"))?;
                 Ok(SignalId::from_bytes(bytes))
             }
 
@@ -321,13 +321,18 @@ impl Signal {
     pub fn receipt(receipt: &crate::delivery::Receipt, origin: NodeId) -> SignalBuilder {
         SignalBuilder::new(SignalType::Receipt, "receipt")
             .with_correlation(receipt.correlation_id)
-            .with_scope(PropagationScope::Targeted { destination: origin })
-            .with_payload(
-                serde_json::to_value(receipt).unwrap_or(serde_json::Value::Null),
-            )
+            .with_scope(PropagationScope::Targeted {
+                destination: origin,
+            })
+            .with_payload(serde_json::to_value(receipt).unwrap_or(serde_json::Value::Null))
     }
 
     /// Validate this signal according to the NTL specification.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::InvalidSignal`] if the weight is out of range
+    /// or the signature is absent, or [`crate::Error::TtlExpired`] if the TTL
+    /// has run out.
     pub fn validate(&self) -> crate::Result<()> {
         if !(0.0..=1.0).contains(&self.weight) {
             return Err(crate::Error::InvalidSignal(format!(
@@ -341,9 +346,7 @@ impl Signal {
         }
 
         if self.signature.is_empty() {
-            return Err(crate::Error::InvalidSignal(
-                "missing signature".to_string(),
-            ));
+            return Err(crate::Error::InvalidSignal("missing signature".to_string()));
         }
 
         Ok(())
@@ -423,8 +426,8 @@ impl Signal {
     /// [`crate::Error::InvalidSignal`] if the result exceeds
     /// [`Self::MAX_SIZE`].
     pub fn encode(&self) -> crate::Result<Vec<u8>> {
-        let bytes = serde_cbor::to_vec(self)
-            .map_err(|e| crate::Error::Serialization(e.to_string()))?;
+        let bytes =
+            serde_cbor::to_vec(self).map_err(|e| crate::Error::Serialization(e.to_string()))?;
         if bytes.len() > Self::MAX_SIZE {
             return Err(crate::Error::InvalidSignal(format!(
                 "encoded signal is {} bytes, exceeding the {} byte maximum",
@@ -456,16 +459,40 @@ impl Signal {
         serde_cbor::from_slice(bytes).map_err(|e| crate::Error::Serialization(e.to_string()))
     }
 
-    /// The bytes a signature covers: everything except the signature itself.
+    /// The bytes an origin signature covers.
+    ///
+    /// This is the signal's **immutable** content: id, type, version, origin,
+    /// timestamp, payload, encoding, scope, correlation id, tags, and
+    /// delivery class. An intermediate node cannot alter any of them without
+    /// breaking the signature — which is what stops a relay from rewriting a
+    /// payload or downgrading an acknowledged signal to best-effort.
+    ///
+    /// Four fields are deliberately **excluded**, because propagation mutates
+    /// them by design and a signature over them could not survive a single
+    /// hop:
+    ///
+    /// | Field | Mutated by |
+    /// |---|---|
+    /// | `signature` | the signature itself |
+    /// | `trace` | each node appending its id |
+    /// | `ttl` | each hop decrementing it |
+    /// | `weight` | attenuation at each synapse |
+    ///
+    /// The consequence is worth stating plainly: **an on-path node can inflate
+    /// a signal's weight or TTL.** The origin signature does not prevent it.
+    /// What bounds the abuse is that a receiving node enforces its own limits
+    /// on both, hop-to-hop authenticity comes from the synapse rather than
+    /// this signature, and a peer that misbehaves loses synapse weight. See
+    /// [threat-model](https://openntl.org/spec/threat-model) §6.
     ///
     /// # Errors
     /// Returns [`crate::Error::Serialization`] if encoding fails.
     pub fn signing_bytes(&self) -> crate::Result<Vec<u8>> {
         let mut unsigned = self.clone();
         unsigned.signature = Vec::new();
-        // The trace grows as the signal travels, so it cannot be covered by
-        // an origin signature that must still verify downstream.
         unsigned.trace = Vec::new();
+        unsigned.ttl = 0;
+        unsigned.weight = 0.0;
         serde_cbor::to_vec(&unsigned).map_err(|e| crate::Error::Serialization(e.to_string()))
     }
 }
@@ -656,18 +683,14 @@ mod tests {
     #[test]
     fn signal_weight_clamping() {
         let origin = NodeId(vec![0u8; 32]);
-        let signal = Signal::data("test")
-            .with_weight(1.5)
-            .build_unsigned(origin);
+        let signal = Signal::data("test").with_weight(1.5).build_unsigned(origin);
         assert!((signal.weight - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn signal_hop_decrements_ttl() {
         let origin = NodeId(vec![0u8; 32]);
-        let mut signal = Signal::data("test")
-            .with_ttl(5)
-            .build_unsigned(origin);
+        let mut signal = Signal::data("test").with_ttl(5).build_unsigned(origin);
 
         let hop_node = NodeId(vec![1u8; 32]);
         signal.hop(hop_node.clone());
@@ -679,9 +702,7 @@ mod tests {
     #[test]
     fn signal_attenuation() {
         let origin = NodeId(vec![0u8; 32]);
-        let mut signal = Signal::data("test")
-            .with_weight(1.0)
-            .build_unsigned(origin);
+        let mut signal = Signal::data("test").with_weight(1.0).build_unsigned(origin);
 
         signal.attenuate(0.9);
         assert!((signal.weight - 0.9).abs() < f32::EPSILON);

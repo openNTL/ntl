@@ -1,9 +1,9 @@
-//! The SQLite backend must satisfy the same contract as every other backend.
+//! The `SQLite` backend must satisfy the same contract as every other backend.
 
 use ntl_core::signal::{NodeId, SignalId, SignalType};
 use ntl_core::store::{
-    conformance, ActivationSnapshot, Durability, JournalEntry, NodeStore, Outcome, PeerRecord,
-    PeerSource, StoreError, SynapseFilter, SynapseRecord,
+    ActivationSnapshot, Durability, JournalEntry, NodeStore, Outcome, PeerRecord, PeerSource,
+    StoreError, SynapseFilter, SynapseRecord, conformance,
 };
 use ntl_core::synapse::{SynapseId, SynapseState};
 use ntl_store_sqlite::{SqliteConfig, SqliteStore, Synchronous};
@@ -90,7 +90,10 @@ fn open_creates_missing_parent_directories() {
     let nested = dir.path().join("a").join("b").join("node.db");
     let s = SqliteStore::open(nested.to_str().expect("utf8")).expect("open");
     s.migrate().expect("migrate");
-    assert!(nested.exists(), "the database file should have been created");
+    assert!(
+        nested.exists(),
+        "the database file should have been created"
+    );
 }
 
 // -- durability honesty ----------------------------------------------------
@@ -235,6 +238,7 @@ fn custom_signal_types_round_trip_through_the_journal() {
         synapse: SynapseId("syn".into()),
         peer: NodeId(vec![1u8; 32]),
         score: 0.5,
+        signal_weight: 0.8,
         explored: true,
         decided_at_ns: 1_000,
         outcome: Outcome::Pending,
@@ -248,10 +252,11 @@ fn custom_signal_types_round_trip_through_the_journal() {
     assert!(recent[0].explored, "the exploration flag must round-trip");
 
     // And must not be confused with a built-in type.
-    assert!(s
-        .recent_decisions(Some(&SignalType::Data), 10)
-        .expect("recent")
-        .is_empty());
+    assert!(
+        s.recent_decisions(Some(&SignalType::Data), 10)
+            .expect("recent")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -280,7 +285,10 @@ fn expired_dedup_entries_are_treated_as_absent() {
 
     assert!(!s.check_and_set_seen(&id, now, ttl).expect("set"));
     let after = now + (ttl + 1) * 1_000_000_000;
-    assert!(!s.has_seen(&id, after).expect("read"), "should have expired");
+    assert!(
+        !s.has_seen(&id, after).expect("read"),
+        "should have expired"
+    );
     assert!(
         !s.check_and_set_seen(&id, after, ttl).expect("reset"),
         "an expired entry must behave as a first sighting"
@@ -298,6 +306,7 @@ fn resolving_twice_keeps_the_first_outcome() {
             synapse: SynapseId("syn".into()),
             peer: NodeId(vec![1u8; 32]),
             score: 0.5,
+            signal_weight: 0.8,
             explored: false,
             decided_at_ns: 1_000,
             outcome: Outcome::Pending,
@@ -396,7 +405,8 @@ fn influence_is_summed_per_peer_within_the_window() {
 
     s.record_influence(&attacker, 0.1, 100 * sec, 0).expect("a");
     s.record_influence(&attacker, 0.1, 110 * sec, 0).expect("b");
-    s.record_influence(&bystander, 0.9, 110 * sec, 0).expect("c");
+    s.record_influence(&bystander, 0.9, 110 * sec, 0)
+        .expect("c");
 
     let total = s.influence_since(&attacker, 0).expect("sum");
     assert!((total - 0.2).abs() < 1e-5, "got {total}");

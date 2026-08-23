@@ -246,7 +246,10 @@ impl NodeStore for MemoryStore {
     // -- activation --------------------------------------------------------
 
     fn save_activation(&self, snapshot: &ActivationSnapshot) -> StoreResult<()> {
-        *self.activation.write().map_err(|_| poisoned("activation"))? = Some(*snapshot);
+        *self
+            .activation
+            .write()
+            .map_err(|_| poisoned("activation"))? = Some(*snapshot);
         Ok(())
     }
 
@@ -258,7 +261,10 @@ impl NodeStore for MemoryStore {
 
     fn append_decision(&self, entry: &JournalEntry) -> StoreResult<JournalId> {
         let id = {
-            let mut next = self.next_journal_id.lock().map_err(|_| poisoned("journal"))?;
+            let mut next = self
+                .next_journal_id
+                .lock()
+                .map_err(|_| poisoned("journal"))?;
             *next += 1;
             JournalId(*next)
         };

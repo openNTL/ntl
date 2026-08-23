@@ -115,7 +115,15 @@ is published at [openntl.org/spec/overview](https://openntl.org/spec/overview).
 
 ## Project Status
 
-NTL is in **Phase 0: Foundation** — specification development and documentation. See the [roadmap](https://openntl.org/governance/roadmap) for details.
+NTL is in **Phase 1: Reference Implementation**. Phase 0 is complete: the
+specification is at 0.2.0-draft, covering the learning model, threat model,
+delivery semantics, and storage interface.
+
+What runs today: two nodes form a synapse over loopback, exchange signed
+signals, return receipts, and the routing weights change in response. See the
+[roadmap](https://openntl.org/governance/roadmap) for what is not built yet —
+notably QUIC transport, post-quantum crypto modules, and a public test
+network.
 
 ## Contributing
 

@@ -41,8 +41,9 @@
 //! [`store::NodeStore`].
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic)]
 #![warn(missing_docs)]
+// Clippy configuration lives in the workspace manifest, so every crate is
+// linted the same way and the allow-list is documented in one place.
 
 pub mod activation;
 pub mod adapter;

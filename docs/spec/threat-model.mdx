@@ -16,7 +16,7 @@ an attacker who cannot read your data may still be able to **teach your
 node** to send it somewhere useful to them.
 
 This document states what NTL defends against at this version, how, and —
-in [§7](#7-out-of-scope-at-v0-1) — what it does not. The out-of-scope
+in [§8](#8-out-of-scope-at-v0-1) — what it does not. The out-of-scope
 section is normative: an operator who deploys NTL against a threat listed
 there is unprotected, and needs to know that before deploying rather than
 after.
@@ -100,7 +100,7 @@ having *handled* it, earning positive reward for a path that discards
 traffic. This is a black-hole attack and it is only partly mitigated: the
 node has no way to verify handling actually occurred. Mitigation is
 statistical — such a peer accrues no downstream evidence and its affinity
-decays — and incomplete. See [§7](#7-out-of-scope-at-v0-1).
+decays — and incomplete. See [§8](#8-out-of-scope-at-v0-1).
 
 ## 3. Eclipse Attacks on Topology
 
@@ -185,7 +185,49 @@ Verifying first makes CPU exhaustion trivially cheap for the attacker.
 network. A flood still consumes upstream bandwidth, and a node that throttles
 correctly may still be effectively unreachable.
 
-## 6. Traffic Analysis
+## 6. In-Transit Header Mutation
+
+An origin signature covers a signal's **immutable** content: identifier,
+type, origin, timestamp, payload, encoding, scope, correlation id, tags, and
+delivery class. A relay cannot alter any of these without breaking the
+signature, which is what prevents payload rewriting and prevents an
+acknowledged signal being downgraded to best-effort.
+
+Four fields cannot be covered, because propagation mutates them by design:
+
+| Field | Mutated by |
+|---|---|
+| `signature` | the signature itself |
+| `trace` | each node appending its identifier |
+| `ttl` | each hop decrementing it |
+| `weight` | attenuation at each synapse |
+
+A signature over these could not survive one hop.
+
+**Consequence.** An on-path node can inflate a signal's `weight` or `ttl`,
+or forge trace entries. Three things bound the abuse rather than preventing
+it:
+
+1. A receiving node MUST enforce its own limits — `weight` in `[0, 1]`,
+   `ttl` at or below its configured maximum — and clamp or reject
+   regardless of what arrived.
+2. Hop-to-hop authenticity comes from the synapse, not the origin signature.
+   A node knows which peer handed it a signal even when it cannot verify
+   what that peer changed.
+3. A peer that inflates weight to win traffic still faces the per-identity
+   influence cap, and loses synapse weight when the traffic it attracts
+   fails to deliver.
+
+**Residual risk.** A relay can make a signal appear more important, or live
+longer, than its origin intended. It cannot make it say something different.
+Deployments that cannot tolerate this need hop-to-hop authenticated
+transport, and MUST NOT rely on `weight` or `ttl` as trustworthy inputs to
+application logic.
+
+A node MUST NOT use a received `trace` as evidence of a signal's actual
+path. It is a loop-prevention hint, not an audit trail.
+
+## 7. Traffic Analysis
 
 Signal headers — type, weight, tags, TTL, and the recorded trace — are
 readable by every node on the path. The trace in particular reveals the
@@ -195,7 +237,7 @@ A node MUST NOT place sensitive data in tags. Payload confidentiality is
 available through the crypto interface; **header confidentiality is not
 provided**. Traffic patterns are visible to any on-path node.
 
-## 7. Out of Scope at v0.1
+## 8. Out of Scope at v0.1
 
 NTL does **not** defend against the following. Each is a real risk, listed
 so that operators are not surprised.
@@ -214,7 +256,7 @@ so that operators are not surprised.
 
 An implementation MUST NOT claim protection against anything in this table.
 
-## 8. Deployment Guidance
+## 9. Deployment Guidance
 
 | Environment | Recommendations |
 |---|---|
@@ -227,9 +269,9 @@ The strongest available mitigation is an **identity allowlist at synapse
 formation**. Where deployment permits it, most of this document ceases to
 apply, because the adversary can no longer create identities freely.
 
-## 9. Reporting
+## 10. Reporting
 
 Report vulnerabilities per [SECURITY.md](https://github.com/openNTL/ntl/blob/main/SECURITY.md)
 — privately, to security@openntl.org. Attacks listed in
-[§7](#7-out-of-scope-at-v0-1) are welcome as roadmap input but are not
+[§8](#8-out-of-scope-at-v0-1) are welcome as roadmap input but are not
 treated as vulnerabilities.

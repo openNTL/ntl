@@ -36,7 +36,7 @@ pub struct NodeConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub enum StorageConfig {
-    /// SQLite — the default. One file, no configuration.
+    /// `SQLite` — the default. One file, no configuration.
     Sqlite {
         /// Path to the database file.
         path: String,
@@ -45,7 +45,7 @@ pub enum StorageConfig {
         #[serde(default)]
         retain_signal_history: bool,
     },
-    /// PostgreSQL — planned.
+    /// `PostgreSQL` — planned.
     Postgres {
         /// Connection URL.
         url: String,
@@ -212,7 +212,10 @@ mod tests {
         // Mixing an edge learning rate with a server queue is a mistake
         // people make by accident; the class constructor must not.
         let edge = NodeConfig::for_class(DeploymentClass::Edge);
-        assert_eq!(edge.activation.node_class, crate::activation::NodeClass::Edge);
+        assert_eq!(
+            edge.activation.node_class,
+            crate::activation::NodeClass::Edge
+        );
         let high = NodeConfig::for_class(DeploymentClass::HighTraffic);
         assert_eq!(
             high.activation.node_class,

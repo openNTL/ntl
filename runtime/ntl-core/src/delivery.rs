@@ -16,17 +16,13 @@ use crate::signal::SignalId;
 /// How hard a node must try, and whether failure is reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum DeliveryClass {
     /// No guarantee. May be silently absorbed. The default.
+    #[default]
     BestEffort,
     /// At-least-once, or the sender learns it failed. Never silent.
     Acknowledged,
-}
-
-impl Default for DeliveryClass {
-    fn default() -> Self {
-        Self::BestEffort
-    }
 }
 
 impl DeliveryClass {
@@ -254,7 +250,11 @@ mod tests {
         for c in [DeliveryClass::BestEffort, DeliveryClass::Acknowledged] {
             assert_eq!(DeliveryClass::from_wire(c.to_wire()), Some(c));
         }
-        assert_eq!(DeliveryClass::from_wire(2), None, "reserved values must not parse");
+        assert_eq!(
+            DeliveryClass::from_wire(2),
+            None,
+            "reserved values must not parse"
+        );
     }
 
     #[test]

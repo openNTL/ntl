@@ -43,21 +43,45 @@ pub enum NodeCapacity {
     Infrastructure,
 }
 
-/// Placeholder for topology manager.
+/// Bootstrap and discovery state for a node's view of the network.
 ///
-/// Will manage synapse topology, discovery, and health monitoring.
+/// Peer records themselves live in the store ([`crate::store::PeerRecord`]);
+/// this holds only the configured starting points, which are not learned and
+/// must not be evicted by discovery.
 pub struct TopologyManager {
     local_node: NodeId,
     bootstrap_nodes: Vec<String>,
 }
 
 impl TopologyManager {
-    /// Create a new topology manager.
+    /// Create a topology manager.
     #[must_use]
     pub fn new(local_node: NodeId, bootstrap_nodes: Vec<String>) -> Self {
         Self {
             local_node,
             bootstrap_nodes,
         }
+    }
+
+    /// The local node's identity.
+    #[must_use]
+    pub fn local_node(&self) -> &NodeId {
+        &self.local_node
+    }
+
+    /// Configured bootstrap addresses.
+    ///
+    /// These are the anchor against eclipse: a node MUST retain capacity for
+    /// them regardless of discovery pressure. See
+    /// [threat-model](https://openntl.org/spec/threat-model) §3.
+    #[must_use]
+    pub fn bootstrap_nodes(&self) -> &[String] {
+        &self.bootstrap_nodes
+    }
+
+    /// Whether a peer is one of the configured bootstrap nodes.
+    #[must_use]
+    pub fn is_bootstrap(&self, address: &str) -> bool {
+        self.bootstrap_nodes.iter().any(|b| b == address)
     }
 }

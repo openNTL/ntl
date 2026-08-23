@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rng::Rng;
 use crate::store::Outcome;
-use crate::time::{ns_to_hours, NANOS_PER_HOUR};
+use crate::time::{NANOS_PER_HOUR, ns_to_hours};
 
 /// Deployment class, selecting hyperparameter defaults.
 ///
@@ -27,19 +27,15 @@ use crate::time::{ns_to_hours, NANOS_PER_HOUR};
 /// node sees little traffic and must learn faster from less.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum DeploymentClass {
     /// Constrained device: phone, sensor, intermittent link.
+    #[default]
     Edge,
     /// General-purpose participating node.
     FullNode,
     /// High-volume infrastructure node.
     HighTraffic,
-}
-
-impl Default for DeploymentClass {
-    fn default() -> Self {
-        Self::Edge
-    }
 }
 
 /// Hyperparameters for the routing model.
@@ -48,6 +44,7 @@ impl Default for DeploymentClass {
 ///
 /// [spec]: https://openntl.org/spec/learning-model
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LearningConfig {
     /// Whether weights are updated at all. A node with this off MUST report
     /// that it does not learn.
@@ -276,7 +273,12 @@ pub fn apply_affinity_update(affinity: f32, outcome: Outcome, config: &LearningC
 /// Callers may apply this lazily on read: the result is identical to
 /// continuous application, because the formula depends only on elapsed time.
 #[must_use]
-pub fn decayed_weight(weight: f32, last_active_ns: u64, now_ns: u64, config: &LearningConfig) -> f32 {
+pub fn decayed_weight(
+    weight: f32,
+    last_active_ns: u64,
+    now_ns: u64,
+    config: &LearningConfig,
+) -> f32 {
     if now_ns <= last_active_ns {
         return weight;
     }
@@ -329,8 +331,10 @@ pub fn normalize_outbound(weights: &mut [f32], config: &LearningConfig) -> Optio
 /// Which policy selects among scored candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ExplorationPolicy {
     /// Softmax over scores with temperature. RECOMMENDED.
+    #[default]
     Softmax,
     /// Top-k, with one slot occasionally replaced by a uniform draw.
     /// Cheaper; for nodes without floating-point `exp`.
@@ -338,12 +342,6 @@ pub enum ExplorationPolicy {
         /// Probability of substituting an exploratory pick.
         epsilon: f32,
     },
-}
-
-impl Default for ExplorationPolicy {
-    fn default() -> Self {
-        Self::Softmax
-    }
 }
 
 /// One selected candidate.
@@ -380,7 +378,9 @@ pub fn sample_paths(
         return Vec::new();
     }
     let mut out = match policy {
-        ExplorationPolicy::Softmax => softmax_sample(scores, k, config.effective_temperature(), rng),
+        ExplorationPolicy::Softmax => {
+            softmax_sample(scores, k, config.effective_temperature(), rng)
+        }
         ExplorationPolicy::EpsilonGreedy { epsilon } => {
             epsilon_greedy_sample(scores, k, epsilon, rng)
         }
@@ -610,7 +610,11 @@ mod tests {
     #[test]
     fn signature_failure_is_the_strongest_penalty() {
         let c = cfg();
-        let outcomes = [Outcome::TimedOut, Outcome::Rejected, Outcome::TransportFailure];
+        let outcomes = [
+            Outcome::TimedOut,
+            Outcome::Rejected,
+            Outcome::TransportFailure,
+        ];
         let sig = apply_reward(0.9, Outcome::SignatureFailure, 1.0, 0.0, &c).after;
         for o in outcomes {
             assert!(sig <= apply_reward(0.9, o, 1.0, 0.0, &c).after);
@@ -644,7 +648,10 @@ mod tests {
         let c = cfg();
         let up = apply_reward(0.5, Outcome::Delivered, 1.0, c.influence_cap_per_peer, &c);
         assert!(up.capped);
-        assert!(up.is_noop(), "a peer past its cap must not gain more weight");
+        assert!(
+            up.is_noop(),
+            "a peer past its cap must not gain more weight"
+        );
     }
 
     #[test]
@@ -659,7 +666,13 @@ mod tests {
     #[test]
     fn cap_is_asymmetric_negatives_always_apply() {
         let c = cfg();
-        let up = apply_reward(0.5, Outcome::Rejected, 1.0, c.influence_cap_per_peer * 10.0, &c);
+        let up = apply_reward(
+            0.5,
+            Outcome::Rejected,
+            1.0,
+            c.influence_cap_per_peer * 10.0,
+            &c,
+        );
         assert!(
             up.after < 0.5,
             "an attacker must not be able to spend their own budget to \
@@ -844,7 +857,10 @@ mod tests {
                 best += 1;
             }
         }
-        assert!(best > 480, "low temperature should be near-greedy, got {best}/500");
+        assert!(
+            best > 480,
+            "low temperature should be near-greedy, got {best}/500"
+        );
     }
 
     #[test]
@@ -857,7 +873,8 @@ mod tests {
         let scores = vec![0.9, 0.5, 0.1];
         let mut counts = [0u32; 3];
         for _ in 0..9_000 {
-            counts[sample_paths(&scores, 1, ExplorationPolicy::Softmax, &c, &mut rng)[0].index] += 1;
+            counts[sample_paths(&scores, 1, ExplorationPolicy::Softmax, &c, &mut rng)[0].index] +=
+                1;
         }
         for (i, &c) in counts.iter().enumerate() {
             assert!(

@@ -43,6 +43,7 @@ impl Default for PropagationScope {
 
 /// Configuration for the propagation engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PropagationConfig {
     /// Default propagation strategy.
     pub default_strategy: PropagationScope,
@@ -220,6 +221,11 @@ pub struct Chosen<'a> {
 /// exploration serves routing under uncertainty, and there is none here.
 ///
 /// Returns choices ordered best-score-first.
+// Eight parameters, all load-bearing: the topology, the scope, the type key,
+// the arrival exclusion, two configs, and the injected clock and RNG. Bundling
+// them into a struct would add a type used exactly once and hide which inputs
+// the decision actually depends on.
+#[allow(clippy::too_many_arguments)]
 pub fn select_synapses<'a>(
     synapses: &'a [Synapse],
     scope: &PropagationScope,
@@ -318,6 +324,9 @@ pub fn select_synapses<'a>(
 /// acknowledged signal, whose sender must always learn the outcome.
 ///
 /// Returns `Ok(())` when the signal may propagate.
+///
+/// # Errors
+/// Returns the [`crate::delivery::RejectReason`] that blocks propagation.
 pub fn check_propagable(
     signal: &crate::signal::Signal,
     local_node: &NodeId,
@@ -400,9 +409,7 @@ mod tests {
         let w = ScoringWeights::default();
         let strong = make_synapse("strong", 0.9, 1);
         let weak = make_synapse("weak", 0.1, 2);
-        assert!(
-            score_synapse(&strong, "data", NOW, &w) > score_synapse(&weak, "data", NOW, &w)
-        );
+        assert!(score_synapse(&strong, "data", NOW, &w) > score_synapse(&weak, "data", NOW, &w));
     }
 
     #[test]
@@ -450,7 +457,13 @@ mod tests {
         ];
         let config = PropagationConfig::default();
         for seed in 0..50 {
-            let picked = select(&synapses, &PropagationScope::default(), Some("arrival"), &config, seed);
+            let picked = select(
+                &synapses,
+                &PropagationScope::default(),
+                Some("arrival"),
+                &config,
+                seed,
+            );
             assert!(
                 picked.iter().all(|c| c.synapse.id.0 != "arrival"),
                 "a signal must never be sent back the way it came"
@@ -463,7 +476,13 @@ mod tests {
         let mut dormant = make_synapse("dormant", 0.9, 1);
         dormant.state = SynapseState::Dormant;
         let synapses = vec![dormant, make_synapse("active", 0.2, 2)];
-        let picked = select(&synapses, &PropagationScope::default(), None, &PropagationConfig::default(), 2);
+        let picked = select(
+            &synapses,
+            &PropagationScope::default(),
+            None,
+            &PropagationConfig::default(),
+            2,
+        );
         assert!(picked.iter().all(|c| c.synapse.id.0 == "active"));
     }
 
@@ -488,7 +507,16 @@ mod tests {
 
     #[test]
     fn empty_topology_selects_nothing() {
-        assert!(select(&[], &PropagationScope::default(), None, &PropagationConfig::default(), 1).is_empty());
+        assert!(
+            select(
+                &[],
+                &PropagationScope::default(),
+                None,
+                &PropagationConfig::default(),
+                1
+            )
+            .is_empty()
+        );
     }
 
     // -- exploration -------------------------------------------------------
@@ -511,7 +539,9 @@ mod tests {
         for _ in 0..3_000 {
             let picked = select_synapses(
                 &synapses,
-                &PropagationScope::Weighted { min_synapse_weight: 0.0 },
+                &PropagationScope::Weighted {
+                    min_synapse_weight: 0.0,
+                },
                 "data",
                 None,
                 &config,
@@ -532,10 +562,7 @@ mod tests {
 
     #[test]
     fn best_synapse_still_dominates() {
-        let synapses = vec![
-            make_synapse("best", 0.9, 1),
-            make_synapse("worst", 0.05, 2),
-        ];
+        let synapses = vec![make_synapse("best", 0.9, 1), make_synapse("worst", 0.05, 2)];
         let config = PropagationConfig {
             max_fanout: 1,
             ..Default::default()
@@ -557,7 +584,10 @@ mod tests {
                 best += 1;
             }
         }
-        assert!(best > 500, "exploration must not swamp exploitation; got {best}/1000");
+        assert!(
+            best > 500,
+            "exploration must not swamp exploitation; got {best}/1000"
+        );
     }
 
     #[test]
@@ -602,7 +632,13 @@ mod tests {
             max_fanout: 2, // deliberately smaller than the topology
             ..Default::default()
         };
-        let picked = select(&synapses, &PropagationScope::Flood { max_hops: 3 }, None, &config, 3);
+        let picked = select(
+            &synapses,
+            &PropagationScope::Flood { max_hops: 3 },
+            None,
+            &config,
+            3,
+        );
         assert_eq!(picked.len(), 7, "flood must ignore the fanout limit");
     }
 
@@ -623,21 +659,25 @@ mod tests {
                 "a direct synapse is not a routing guess, even against a \
                  much stronger indirect path"
             );
-            assert!(!picked[0].explored, "there is no uncertainty to explore here");
+            assert!(
+                !picked[0].explored,
+                "there is no uncertainty to explore here"
+            );
         }
     }
 
     #[test]
     fn targeted_without_a_direct_synapse_picks_one_path() {
-        let synapses = vec![
-            make_synapse("a", 0.7, 1),
-            make_synapse("b", 0.5, 2),
-        ];
+        let synapses = vec![make_synapse("a", 0.7, 1), make_synapse("b", 0.5, 2)];
         let scope = PropagationScope::Targeted {
             destination: NodeId(vec![99u8; 32]),
         };
         let picked = select(&synapses, &scope, None, &PropagationConfig::default(), 4);
-        assert_eq!(picked.len(), 1, "targeted routing commits to one best guess");
+        assert_eq!(
+            picked.len(),
+            1,
+            "targeted routing commits to one best guess"
+        );
     }
 
     // -- propagation rules -------------------------------------------------
@@ -646,7 +686,9 @@ mod tests {
     fn ttl_zero_blocks_propagation() {
         use crate::delivery::RejectReason;
         let me = NodeId(vec![1u8; 32]);
-        let mut sig = crate::signal::Signal::data("t").with_ttl(1).build_unsigned(NodeId(vec![9u8; 32]));
+        let mut sig = crate::signal::Signal::data("t")
+            .with_ttl(1)
+            .build_unsigned(NodeId(vec![9u8; 32]));
         sig.ttl = 0;
         assert_eq!(
             check_propagable(&sig, &me, &PropagationConfig::default()),

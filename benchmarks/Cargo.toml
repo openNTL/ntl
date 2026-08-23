@@ -1,13 +1,19 @@
 [package]
 name = "ntl-benchmarks"
+description = "Performance benchmarks for the Neural Transfer Layer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
+
 [[bench]]
 name = "signal_benchmarks"
 harness = false
+
 [dependencies]
 ntl-core.workspace = true
 criterion.workspace = true
-tokio.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -28,19 +28,15 @@ use crate::store::ActivationSnapshot;
 /// Activation function type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ActivationFunction {
     /// Binary: fires when potential >= threshold.
+    #[default]
     Step,
     /// Probabilistic: firing probability rises smoothly through the threshold.
     Sigmoid,
     /// Like [`Self::Step`], but always passes a small fraction.
     Leaky,
-}
-
-impl Default for ActivationFunction {
-    fn default() -> Self {
-        Self::Step
-    }
 }
 
 /// Hardware class of a node, selecting activation defaults.
@@ -50,8 +46,10 @@ impl Default for ActivationFunction {
 /// which on server hardware is a self-inflicted throughput ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum NodeClass {
     /// Battery- or CPU-constrained device.
+    #[default]
     Edge,
     /// General-purpose node.
     Standard,
@@ -61,20 +59,16 @@ pub enum NodeClass {
     Infrastructure,
 }
 
-impl Default for NodeClass {
-    fn default() -> Self {
-        Self::Edge
-    }
-}
-
 /// What happens when a signal arrives at a full queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum OverflowPolicy {
     /// Drop whichever of the arriving and weakest-queued signal is lighter.
     ///
     /// The default: weight means importance everywhere else in the protocol,
     /// and under load is exactly when honouring it matters.
+    #[default]
     DropLowestWeight,
     /// Drop the arriving signal.
     DropNewest,
@@ -82,16 +76,31 @@ pub enum OverflowPolicy {
     DropOldest,
 }
 
-impl Default for OverflowPolicy {
-    fn default() -> Self {
-        Self::DropLowestWeight
-    }
+// Fields added after 0.1.0-draft carry serde defaults, so upgrading NTL does
+// not refuse to start against a config written by an older build. An operator
+// gets edge-class defaults for anything absent and can regenerate with
+// `ntl init --force`.
+fn default_node_class() -> NodeClass {
+    NodeClass::Edge
+}
+fn default_fire_batch_size() -> usize {
+    8
+}
+fn default_max_queue_depth() -> usize {
+    256
+}
+fn default_leak_rate() -> f32 {
+    0.01
+}
+fn default_max_queue_latency_ms() -> u64 {
+    1_000
 }
 
 /// Configuration for the activation model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivationConfig {
     /// Hardware class, which supplies the defaults below.
+    #[serde(default = "default_node_class")]
     pub node_class: NodeClass,
     /// Base activation threshold.
     pub base_threshold: f32,
@@ -104,24 +113,45 @@ pub struct ActivationConfig {
     /// Whether the threshold rises with load.
     pub dynamic_threshold: bool,
     /// Signals drained per fire. MUST be at least 1.
+    #[serde(default = "default_fire_batch_size")]
     pub fire_batch_size: usize,
     /// Queue bound. `load_factor` is defined against this.
+    #[serde(default = "default_max_queue_depth")]
     pub max_queue_depth: usize,
     /// What to drop when the queue is full.
+    #[serde(default)]
     pub overflow_policy: OverflowPolicy,
     /// Leak probability for [`ActivationFunction::Leaky`].
+    #[serde(default = "default_leak_rate")]
     pub leak_rate: f32,
+    /// Longest a signal may wait in the queue before the node fires anyway,
+    /// in milliseconds. `0` disables the guard.
+    ///
+    /// Without this a node can starve a signal indefinitely. Contribution is
+    /// `signal_weight × synapse_weight`, but the threshold is absolute, so a
+    /// new synapse at weight `0.1` carrying a weight-`0.45` signal
+    /// contributes `0.045` against a threshold of `0.5` — the node cannot
+    /// fire on that signal no matter how long it waits, and no amount of
+    /// idleness helps.
+    ///
+    /// That is fatal for acknowledged delivery: the sender's receipt window
+    /// expires, the decision resolves as `TimedOut`, and the routing model
+    /// learns to avoid a path that was working perfectly. The guard bounds
+    /// queue latency so backpressure stays a delay rather than becoming a
+    /// silent drop.
+    #[serde(default = "default_max_queue_latency_ms")]
+    pub max_queue_latency_ms: u64,
 }
 
 impl ActivationConfig {
     /// Defaults for a node class.
     #[must_use]
     pub fn for_class(class: NodeClass) -> Self {
-        let (refractory_ms, batch, depth, max_potential) = match class {
-            NodeClass::Edge => (10, 8, 256, 10.0),
-            NodeClass::Standard => (1, 16, 1_024, 10.0),
-            NodeClass::Server => (0, 64, 8_192, 50.0),
-            NodeClass::Infrastructure => (0, 128, 32_768, 100.0),
+        let (refractory_ms, batch, depth, max_potential, latency_guard_ms) = match class {
+            NodeClass::Edge => (10, 8, 256, 10.0, 1_000),
+            NodeClass::Standard => (1, 16, 1_024, 10.0, 500),
+            NodeClass::Server => (0, 64, 8_192, 50.0, 250),
+            NodeClass::Infrastructure => (0, 128, 32_768, 100.0, 100),
         };
         Self {
             node_class: class,
@@ -134,6 +164,7 @@ impl ActivationConfig {
             max_queue_depth: depth,
             overflow_policy: OverflowPolicy::DropLowestWeight,
             leak_rate: 0.01,
+            max_queue_latency_ms: latency_guard_ms,
         }
     }
 
@@ -165,7 +196,16 @@ impl ActivationConfig {
             ));
         }
         if !(0.0..=1.0).contains(&self.leak_rate) {
-            return Err(format!("leak_rate must be in [0, 1], got {}", self.leak_rate));
+            return Err(format!(
+                "leak_rate must be in [0, 1], got {}",
+                self.leak_rate
+            ));
+        }
+        if self.max_queue_latency_ms > 0 && self.max_queue_latency_ms < self.refractory_period_ms {
+            return Err(format!(
+                "max_queue_latency_ms ({}) must be at least refractory_period_ms ({}),                  or the guard can never fire",
+                self.max_queue_latency_ms, self.refractory_period_ms
+            ));
         }
         Ok(())
     }
@@ -182,6 +222,12 @@ impl Default for ActivationConfig {
 pub struct QueuedSignal {
     /// Which signal.
     pub id: SignalId,
+    /// Where it came from.
+    ///
+    /// Carried so a signal released by the starvation guard can still be
+    /// acknowledged: the receipt needs somewhere to go, and by then the full
+    /// signal body may be long gone.
+    pub origin: crate::signal::NodeId,
     /// Its weight, which orders both processing and overflow.
     pub weight: f32,
     /// Its delivery class, which decides whether a drop must be reported.
@@ -237,6 +283,7 @@ pub struct ActivationState {
     max_queue_depth: usize,
     overflow_policy: OverflowPolicy,
     leak_rate: f32,
+    max_queue_latency_ns: u64,
     queue: Vec<QueuedSignal>,
     signals_fired: u64,
     signals_dropped: u64,
@@ -260,6 +307,7 @@ impl ActivationState {
             max_queue_depth: config.max_queue_depth.max(1),
             overflow_policy: config.overflow_policy,
             leak_rate: config.leak_rate,
+            max_queue_latency_ns: config.max_queue_latency_ms.saturating_mul(1_000_000),
             queue: Vec::new(),
             signals_fired: 0,
             signals_dropped: 0,
@@ -311,10 +359,15 @@ impl ActivationState {
             self.recompute_threshold();
         }
 
-        let fired = if self.in_refractory(now_ns) || !self.evaluate(rng) {
+        let fired = if self.in_refractory(now_ns) {
+            // Refractory always wins: it is the one bound that protects the
+            // hardware, and the guard below only decides *whether* to fire
+            // once firing is permitted at all.
             Vec::new()
-        } else {
+        } else if self.evaluate(rng) || self.is_starving(now_ns) {
             self.fire(now_ns)
+        } else {
+            Vec::new()
         };
 
         AdmitOutcome {
@@ -419,6 +472,21 @@ impl ActivationState {
         self.threshold = self.base_threshold * (1.0 + self.load_factor());
     }
 
+    /// Whether the oldest queued signal has waited past the latency guard.
+    ///
+    /// This is what stops backpressure from becoming an indefinite hold. See
+    /// [`ActivationConfig::max_queue_latency_ms`] for why an absolute
+    /// threshold alone can starve a signal forever.
+    #[must_use]
+    pub fn is_starving(&self, now_ns: u64) -> bool {
+        if self.max_queue_latency_ns == 0 {
+            return false;
+        }
+        self.queue
+            .iter()
+            .any(|s| now_ns.saturating_sub(s.enqueued_at_ns) >= self.max_queue_latency_ns)
+    }
+
     /// Whether the gate is refractory.
     #[must_use]
     pub fn in_refractory(&self, now_ns: u64) -> bool {
@@ -438,6 +506,18 @@ impl ActivationState {
         if self.dynamic {
             self.threshold = self.base_threshold * (1.0 + load_factor.clamp(0.0, 1.0));
         }
+    }
+
+    /// Drain a batch only if the queue is starving.
+    ///
+    /// Called from periodic maintenance: the guard in [`Self::admit`] can only
+    /// act when another signal arrives, so a queue that goes quiet while
+    /// holding a below-threshold signal needs this to release it.
+    pub fn drain_if_starving(&mut self, now_ns: u64) -> Vec<QueuedSignal> {
+        if self.in_refractory(now_ns) || !self.is_starving(now_ns) {
+            return Vec::new();
+        }
+        self.fire(now_ns)
     }
 
     /// Drain a batch without waiting for the threshold.
@@ -516,6 +596,9 @@ mod tests {
             dynamic_threshold: false,
             fire_batch_size: 4,
             max_queue_depth: 8,
+            // Disabled so threshold behaviour can be tested in isolation;
+            // the guard has its own tests below.
+            max_queue_latency_ms: 0,
             ..ActivationConfig::for_class(NodeClass::Edge)
         }
     }
@@ -523,6 +606,7 @@ mod tests {
     fn sig(n: u64, weight: f32) -> QueuedSignal {
         QueuedSignal {
             id: SignalId::from_parts(1_700_000_000_000 + n, u128::from(n) << 64),
+            origin: crate::signal::NodeId(vec![9u8; 32]),
             weight,
             delivery: DeliveryClass::BestEffort,
             enqueued_at_ns: 0,
@@ -537,6 +621,29 @@ mod tests {
     }
 
     // -- config ------------------------------------------------------------
+
+    #[test]
+    fn a_config_missing_new_fields_still_parses() {
+        // Upgrading NTL must not refuse to start against a config written by
+        // an older build.
+        let old_style = r#"
+            base_threshold = 0.5
+            activation_function = "step"
+            refractory_period_ms = 10
+            max_potential = 10.0
+            dynamic_threshold = true
+        "#;
+        let parsed: ActivationConfig =
+            toml::from_str(old_style).expect("a 0.1.0-era config must still parse");
+        assert_eq!(parsed.node_class, NodeClass::Edge);
+        assert!(parsed.fire_batch_size >= 1);
+        assert!(
+            parsed.max_queue_latency_ms > 0,
+            "the starvation guard must be on by default, or an upgraded node \
+             can silently hold signals forever"
+        );
+        parsed.validate().expect("defaults must be valid");
+    }
 
     #[test]
     fn node_class_defaults_scale_with_capability() {
@@ -732,7 +839,10 @@ mod tests {
         assert!(st.in_refractory(5 * MS));
 
         let out = st.admit(sig(2, 1.0), 1.0, 5 * MS, &mut rng);
-        assert!(!out.did_fire(), "must not fire inside the refractory period");
+        assert!(
+            !out.did_fire(),
+            "must not fire inside the refractory period"
+        );
         assert_eq!(st.queue_depth(), 1, "but the signal must still queue");
 
         let out = st.admit(sig(3, 1.0), 1.0, 11 * MS, &mut rng);
@@ -820,7 +930,11 @@ mod tests {
 
         let out = st.admit(sig(3, 0.01), 1.0, 0, &mut rng);
         let dropped = out.dropped.expect("queue was full");
-        assert_eq!(dropped.id, sig(3, 0.01).id, "the weak arrival should be dropped");
+        assert_eq!(
+            dropped.id,
+            sig(3, 0.01).id,
+            "the weak arrival should be dropped"
+        );
     }
 
     #[test]
@@ -907,6 +1021,98 @@ mod tests {
         assert!(!out.needs_receipt());
     }
 
+    // -- starvation guard --------------------------------------------------
+
+    #[test]
+    fn a_signal_below_threshold_eventually_fires_anyway() {
+        // Regression for a real starvation bug. Contribution is
+        // signal_weight * synapse_weight, but the threshold is absolute, so a
+        // fresh synapse at 0.1 carrying a 0.45 signal contributes 0.045
+        // against 0.5 and can never cross it. Before the guard, such a signal
+        // was queued forever, the sender's receipt window expired, and the
+        // model learned to avoid a path that worked.
+        let mut st = ActivationState::new(&ActivationConfig {
+            max_queue_latency_ms: 1_000,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(30);
+
+        let out = st.admit(sig(1, 0.45), 0.1, 0, &mut rng);
+        assert!(!out.did_fire(), "0.045 is far below the 0.5 threshold");
+        assert_eq!(st.queue_depth(), 1);
+
+        // Still inside the guard window.
+        let out = st.admit(sig(2, 0.45), 0.1, 500 * MS, &mut rng);
+        assert!(!out.did_fire());
+
+        // Past it.
+        let out = st.admit(sig(3, 0.45), 0.1, 1_100 * MS, &mut rng);
+        assert!(
+            out.did_fire(),
+            "a signal must not be starved indefinitely; backpressure is a \
+             delay, not a silent drop"
+        );
+    }
+
+    #[test]
+    fn the_guard_respects_the_refractory_period() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            max_queue_latency_ms: 100,
+            refractory_period_ms: 50,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(31);
+
+        // Fire once to enter refractory.
+        assert!(st.admit(sig(1, 1.0), 1.0, 0, &mut rng).did_fire());
+        // A starving signal must still wait out the refractory period: that
+        // bound is what protects the hardware.
+        let out = st.admit(sig(2, 0.01), 0.01, 20 * MS, &mut rng);
+        assert!(!out.did_fire(), "refractory must win over the guard");
+    }
+
+    #[test]
+    fn a_zero_guard_disables_it() {
+        let mut st = ActivationState::new(&ActivationConfig {
+            max_queue_latency_ms: 0,
+            ..cfg()
+        });
+        let mut rng = SplitMix64::seeded(32);
+        st.admit(sig(1, 0.01), 0.01, 0, &mut rng);
+        assert!(!st.is_starving(u64::MAX / 2));
+        assert!(
+            !st.admit(sig(2, 0.01), 0.01, u64::MAX / 2, &mut rng)
+                .did_fire()
+        );
+    }
+
+    #[test]
+    fn every_class_default_enables_the_guard() {
+        for c in [
+            NodeClass::Edge,
+            NodeClass::Standard,
+            NodeClass::Server,
+            NodeClass::Infrastructure,
+        ] {
+            let config = ActivationConfig::for_class(c);
+            assert!(
+                config.max_queue_latency_ms > 0,
+                "{c:?} must not ship able to starve a signal forever"
+            );
+            assert!(config.max_queue_latency_ms >= config.refractory_period_ms);
+        }
+    }
+
+    #[test]
+    fn validate_rejects_a_guard_shorter_than_the_refractory_period() {
+        let c = ActivationConfig {
+            max_queue_latency_ms: 5,
+            refractory_period_ms: 50,
+            ..cfg()
+        };
+        assert!(c.validate().is_err());
+    }
+
     // -- dynamic threshold -------------------------------------------------
 
     #[test]
@@ -916,7 +1122,10 @@ mod tests {
             ..cfg()
         });
         st.adjust_for_load(1.0);
-        assert!((st.threshold() - 1.0).abs() < f32::EPSILON, "0.5 * (1 + 1.0)");
+        assert!(
+            (st.threshold() - 1.0).abs() < f32::EPSILON,
+            "0.5 * (1 + 1.0)"
+        );
         st.adjust_for_load(0.0);
         assert!((st.threshold() - 0.5).abs() < f32::EPSILON);
     }
@@ -989,7 +1198,10 @@ mod tests {
                 fires += 1;
             }
         }
-        assert!(fires > 0 && fires < 500, "sigmoid should be stochastic; got {fires}");
+        assert!(
+            fires > 0 && fires < 500,
+            "sigmoid should be stochastic; got {fires}"
+        );
     }
 
     // -- persistence -------------------------------------------------------
@@ -1027,7 +1239,10 @@ mod tests {
         };
         let mut st = ActivationState::new(&cfg());
         st.restore(&snap);
-        assert!(st.in_refractory(20 * MS), "the deadline must survive a restart");
+        assert!(
+            st.in_refractory(20 * MS),
+            "the deadline must survive a restart"
+        );
         assert_eq!(st.fire_count(), 7);
     }
 

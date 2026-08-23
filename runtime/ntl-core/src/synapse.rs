@@ -65,9 +65,10 @@ impl SynapseState {
 }
 
 /// The underlying transport for a synapse.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Transport {
     /// QUIC — default, multiplexed, encrypted.
+    #[default]
     Quic,
     /// TCP — fallback, widely supported.
     Tcp,
@@ -77,12 +78,6 @@ pub enum Transport {
     BluetoothLe,
     /// Application-defined transport.
     Custom(String),
-}
-
-impl Default for Transport {
-    fn default() -> Self {
-        Self::Quic
-    }
 }
 
 /// An NTL synapse — a persistent, weighted connection between nodes.
@@ -139,6 +134,7 @@ pub struct Synapse {
 
 /// Configuration for synapse behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SynapseConfig {
     /// Initial weight for new synapses.
     pub initial_weight: f32,
@@ -258,7 +254,10 @@ impl Synapse {
         }
 
         // Update type affinity
-        *self.type_affinity.entry(signal_type.to_string()).or_insert(0) += 1;
+        *self
+            .type_affinity
+            .entry(signal_type.to_string())
+            .or_insert(0) += 1;
 
         self.error_rate *= 0.99; // Decay error rate on success
     }
@@ -509,13 +508,7 @@ mod tests {
         synapse.state = SynapseState::Active;
 
         let learning = crate::learning::LearningConfig::default();
-        synapse.apply_outcome(
-            crate::store::Outcome::Rejected,
-            0.8,
-            "data",
-            0.0,
-            &learning,
-        );
+        synapse.apply_outcome(crate::store::Outcome::Rejected, 0.8, "data", 0.0, &learning);
 
         assert!(
             synapse.weight < config.initial_weight,
@@ -559,8 +552,7 @@ mod tests {
 
         let learning = crate::learning::LearningConfig::default();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let half_life_ns =
-            (learning.decay_half_life_hours as u64) * crate::time::NANOS_PER_HOUR;
+        let half_life_ns = (learning.decay_half_life_hours as u64) * crate::time::NANOS_PER_HOUR;
         synapse.apply_decay(half_life_ns, &learning);
 
         assert!(

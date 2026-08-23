@@ -69,6 +69,7 @@ fn decision(signal: SignalId, peer: u8, at_ns: u64) -> JournalEntry {
         synapse: SynapseId("syn-a".into()),
         peer: node(peer),
         score: 0.75,
+        signal_weight: 0.8,
         explored: false,
         decided_at_ns: at_ns,
         outcome: Outcome::Pending,
@@ -125,7 +126,10 @@ fn synapse_roundtrip(store: &dyn NodeStore) {
     let mut updated = record.clone();
     updated.weight = 0.99;
     store.put_synapse(&updated).expect("re-put");
-    let refetched = store.get_synapse(&record.id).expect("get").expect("present");
+    let refetched = store
+        .get_synapse(&record.id)
+        .expect("get")
+        .expect("present");
     assert!(
         (refetched.weight - 0.99).abs() < f32::EPSILON,
         "put must replace an existing record"
@@ -208,7 +212,9 @@ fn synapse_listing_is_ordered_and_filtered(store: &dyn NodeStore) {
     assert_eq!(capped.len(), 1, "limit must be respected");
 
     for id in ids {
-        store.delete_synapse(&SynapseId(id.to_string())).expect("cleanup");
+        store
+            .delete_synapse(&SynapseId(id.to_string()))
+            .expect("cleanup");
     }
 }
 
@@ -302,11 +308,15 @@ fn dedup_entries_expire(store: &dyn NodeStore) {
         "entry must expire once its TTL has elapsed"
     );
     assert!(
-        !store.check_and_set_seen(&id, after, ttl_secs).expect("reset"),
+        !store
+            .check_and_set_seen(&id, after, ttl_secs)
+            .expect("reset"),
         "an expired entry must behave as absent"
     );
 
-    let purged = store.purge_expired_seen(after + 1_000 * SEC).expect("purge");
+    let purged = store
+        .purge_expired_seen(after + 1_000 * SEC)
+        .expect("purge");
     assert!(purged >= 1, "purge must reclaim expired entries");
 }
 
@@ -360,6 +370,10 @@ fn journal_roundtrip(store: &dyn NodeStore) {
     assert_eq!(pending.id, Some(id), "the assigned id must be returned");
     assert_eq!(pending.outcome, Outcome::Pending);
     assert_eq!(pending.score, entry.score, "score must round-trip");
+    assert_eq!(
+        pending.signal_weight, entry.signal_weight,
+        "the carried signal's weight must round-trip; the reward rule scales by it"
+    );
 
     let resolved = store
         .resolve_decision(id, Outcome::Delivered, 11 * SEC)
@@ -456,7 +470,10 @@ fn journal_timeout_sweep(store: &dyn NodeStore) {
     );
 
     let trimmed = store.trim_journal(60 * SEC).expect("trim");
-    assert!(trimmed >= 1, "trim must remove entries older than the cutoff");
+    assert!(
+        trimmed >= 1,
+        "trim must remove entries older than the cutoff"
+    );
 }
 
 /// Influence must accumulate per peer inside the window and ignore anything

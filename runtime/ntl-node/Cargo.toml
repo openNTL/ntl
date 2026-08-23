@@ -1,10 +1,20 @@
 [package]
 name = "ntl-node"
+description = "Full node binary for the Neural Transfer Layer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
 [dependencies]
 ntl-core.workspace = true
-tokio.workspace = true
+ntl-net.workspace = true
+tokio = { workspace = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

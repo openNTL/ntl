@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS journal (
     synapse        TEXT NOT NULL,
     peer           BLOB NOT NULL,
     score          REAL NOT NULL,
+    signal_weight  REAL NOT NULL,
     explored       INTEGER NOT NULL,
     decided_at_ns  INTEGER NOT NULL,
     outcome        TEXT NOT NULL,

@@ -1,4 +1,4 @@
-//! SQLite storage backend for NTL — the zero-config default.
+//! `SQLite` storage backend for NTL — the zero-config default.
 //!
 //! One file, no server, no configuration. This is the edge story rather than
 //! a compromise on it: WAL mode lets the propagation path read synapse
@@ -33,11 +33,11 @@ use ntl_core::store::{
     PeerSource, StoreError, StoreResult, SynapseFilter, SynapseRecord,
 };
 use ntl_core::synapse::{SynapseId, SynapseState};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 pub use schema::CURRENT_VERSION;
 
-/// How aggressively SQLite flushes to disk.
+/// How aggressively `SQLite` flushes to disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Synchronous {
     /// `synchronous = FULL`. Survives power loss; heaviest write load.
@@ -122,10 +122,7 @@ impl SqliteStore {
         if let Some(parent) = config.path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(|e| {
-                    StoreError::Unavailable(format!(
-                        "cannot create {}: {e}",
-                        parent.display()
-                    ))
+                    StoreError::Unavailable(format!("cannot create {}: {e}", parent.display()))
                 })?;
             }
         }
@@ -245,7 +242,7 @@ fn corrupt(table: &str, reason: impl std::fmt::Display) -> StoreError {
     }
 }
 
-/// SQLite integers are signed; timestamps are `u64`. Saturating rather than
+/// `SQLite` integers are signed; timestamps are `u64`. Saturating rather than
 /// wrapping keeps a far-future timestamp ordering as far-future.
 #[allow(clippy::cast_possible_wrap)]
 fn to_i64(v: u64) -> i64 {
@@ -353,9 +350,12 @@ fn json_vec(raw: &str, table: &str) -> StoreResult<Vec<String>> {
 }
 
 fn signal_id_from_blob(blob: &[u8]) -> StoreResult<SignalId> {
-    let bytes: [u8; 16] = blob
-        .try_into()
-        .map_err(|_| corrupt("signal id", format!("expected 16 bytes, got {}", blob.len())))?;
+    let bytes: [u8; 16] = blob.try_into().map_err(|_| {
+        corrupt(
+            "signal id",
+            format!("expected 16 bytes, got {}", blob.len()),
+        )
+    })?;
     Ok(SignalId::from_bytes(bytes))
 }
 
@@ -401,10 +401,11 @@ fn row_to_journal(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoreResult<Journ
     let synapse: String = row.get(3)?;
     let peer: Vec<u8> = row.get(4)?;
     let score: f64 = row.get(5)?;
-    let explored: i64 = row.get(6)?;
-    let decided: i64 = row.get(7)?;
-    let outcome: String = row.get(8)?;
-    let resolved: Option<i64> = row.get(9)?;
+    let signal_weight: f64 = row.get(6)?;
+    let explored: i64 = row.get(7)?;
+    let decided: i64 = row.get(8)?;
+    let outcome: String = row.get(9)?;
+    let resolved: Option<i64> = row.get(10)?;
 
     Ok((|| {
         Ok(JournalEntry {
@@ -415,6 +416,8 @@ fn row_to_journal(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoreResult<Journ
             peer: NodeId(peer),
             #[allow(clippy::cast_possible_truncation)]
             score: score as f32,
+            #[allow(clippy::cast_possible_truncation)]
+            signal_weight: signal_weight as f32,
             explored: explored != 0,
             decided_at_ns: from_i64(decided),
             outcome: outcome_from_str(&outcome)?,
@@ -427,8 +430,8 @@ const SYNAPSE_COLUMNS: &str = "id, peer, weight, attenuation_factor, state, type
      established_at_ns, last_active_ns, signals_transmitted, signals_received, \
      avg_latency_ns, error_rate";
 
-const JOURNAL_COLUMNS: &str = "id, signal, signal_type, synapse, peer, score, explored, \
-     decided_at_ns, outcome, resolved_at_ns";
+const JOURNAL_COLUMNS: &str = "id, signal, signal_type, synapse, peer, score, signal_weight, \
+     explored, decided_at_ns, outcome, resolved_at_ns";
 
 // ---------------------------------------------------------------------------
 // NodeStore
@@ -577,6 +580,8 @@ impl NodeStore for SqliteStore {
     }
 
     fn list_synapses(&self, filter: &SynapseFilter) -> StoreResult<Vec<SynapseRecord>> {
+        use std::fmt::Write as _;
+
         let mut sql = format!("SELECT {SYNAPSE_COLUMNS} FROM synapses WHERE 1=1");
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -587,7 +592,9 @@ impl NodeStore for SqliteStore {
                 .map(|_| "?")
                 .collect::<Vec<_>>()
                 .join(",");
-            sql.push_str(&format!(" AND state IN ({placeholders})"));
+            // The placeholders are generated from the filter's own length, not
+            // from user input; every value is still bound as a parameter.
+            let _ = write!(sql, " AND state IN ({placeholders})");
             for state in &filter.states {
                 args.push(Box::new(state_to_str(*state)));
             }
@@ -609,7 +616,8 @@ impl NodeStore for SqliteStore {
 
         let conn = self.lock()?;
         let mut stmt = conn.prepare(&sql).map_err(read_err)?;
-        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(std::convert::AsRef::as_ref).collect();
+        let refs: Vec<&dyn rusqlite::ToSql> =
+            args.iter().map(std::convert::AsRef::as_ref).collect();
         let rows = stmt
             .query_map(refs.as_slice(), row_to_synapse)
             .map_err(read_err)?;
@@ -724,11 +732,7 @@ impl NodeStore for SqliteStore {
                 "INSERT INTO seen_signals (id, expires_ns) VALUES (?1, ?2) \
                  ON CONFLICT(id) DO UPDATE SET expires_ns = excluded.expires_ns \
                  WHERE seen_signals.expires_ns <= ?3",
-                params![
-                    id.to_bytes().to_vec(),
-                    to_i64(expires),
-                    to_i64(now_ns)
-                ],
+                params![id.to_bytes().to_vec(), to_i64(expires), to_i64(now_ns)],
             )
             .map_err(write_err)?;
 
@@ -818,15 +822,16 @@ impl NodeStore for SqliteStore {
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO journal \
-                 (signal, signal_type, synapse, peer, score, explored, decided_at_ns, \
-                  outcome, resolved_at_ns) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                 (signal, signal_type, synapse, peer, score, signal_weight, explored, \
+                  decided_at_ns, outcome, resolved_at_ns) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 entry.signal.to_bytes().to_vec(),
                 signal_type_to_str(&entry.signal_type),
                 entry.synapse.0,
                 entry.peer.0,
                 f64::from(entry.score),
+                f64::from(entry.signal_weight),
                 i64::from(entry.explored),
                 to_i64(entry.decided_at_ns),
                 outcome_to_str(entry.outcome),
@@ -918,34 +923,31 @@ impl NodeStore for SqliteStore {
         let conn = self.lock()?;
         let limit = to_i64(limit as u64);
         let mut out = Vec::new();
-        match signal_type {
-            Some(t) => {
-                let mut stmt = conn
-                    .prepare(&format!(
-                        "SELECT {JOURNAL_COLUMNS} FROM journal WHERE signal_type = ?1 \
-                         ORDER BY decided_at_ns DESC, id DESC LIMIT ?2"
-                    ))
-                    .map_err(read_err)?;
-                let rows = stmt
-                    .query_map(params![signal_type_to_str(t), limit], row_to_journal)
-                    .map_err(read_err)?;
-                for row in rows {
-                    out.push(row.map_err(read_err)??);
-                }
+        if let Some(t) = signal_type {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {JOURNAL_COLUMNS} FROM journal WHERE signal_type = ?1 \
+                     ORDER BY decided_at_ns DESC, id DESC LIMIT ?2"
+                ))
+                .map_err(read_err)?;
+            let rows = stmt
+                .query_map(params![signal_type_to_str(t), limit], row_to_journal)
+                .map_err(read_err)?;
+            for row in rows {
+                out.push(row.map_err(read_err)??);
             }
-            None => {
-                let mut stmt = conn
-                    .prepare(&format!(
-                        "SELECT {JOURNAL_COLUMNS} FROM journal \
-                         ORDER BY decided_at_ns DESC, id DESC LIMIT ?1"
-                    ))
-                    .map_err(read_err)?;
-                let rows = stmt
-                    .query_map(params![limit], row_to_journal)
-                    .map_err(read_err)?;
-                for row in rows {
-                    out.push(row.map_err(read_err)??);
-                }
+        } else {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {JOURNAL_COLUMNS} FROM journal \
+                     ORDER BY decided_at_ns DESC, id DESC LIMIT ?1"
+                ))
+                .map_err(read_err)?;
+            let rows = stmt
+                .query_map(params![limit], row_to_journal)
+                .map_err(read_err)?;
+            for row in rows {
+                out.push(row.map_err(read_err)??);
             }
         }
         Ok(out)
@@ -1030,9 +1032,11 @@ impl NodeStore for SqliteStore {
 
     fn get_meta(&self, key: &str) -> StoreResult<Option<Vec<u8>>> {
         let conn = self.lock()?;
-        conn.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |row| {
-            row.get(0)
-        })
+        conn.query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
         .optional()
         .map_err(read_err)
     }

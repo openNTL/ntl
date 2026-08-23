@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features
+      - name: Doc tests
+        run: cargo test --workspace --doc
+
+  # ntl-core makes no runtime assumptions: no async executor, no sockets, no
+  # ambient clock or randomness. This job is what keeps that true — it is easy
+  # to reintroduce a dependency that pulls in getrandom or a C library and not
+  # notice until someone tries to build for the browser.
+  wasm:
+    name: wasm32 core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Check ntl-core builds for wasm32
+        run: |
+          cargo check -p ntl-core \
+            --target wasm32-unknown-unknown \
+            --no-default-features
+      - name: Confirm ntl-core pulls in no async runtime
+        run: |
+          # A transport or executor in core would break both the wasm build and
+          # the doctrine it exists to serve. Fail loudly rather than waiting for
+          # the build to fail obscurely later.
+          if cargo tree -p ntl-core --no-default-features -e normal \
+               | grep -qE '^\S* *[|`+-]* *(tokio|quinn|rustls|getrandom) '; then
+            echo "::error::ntl-core must not depend on an async runtime or transport"
+            cargo tree -p ntl-core --no-default-features -e normal
+            exit 1
+          fi
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: rustdoc
+        run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The Quick Start in the README is a promise. This runs it.
+  quickstart:
+    name: Quick Start
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the CLI
+        run: cargo build -p ntl-cli
+      - name: ntl init
+        env:
+          NTL_HOME: ${{ runner.temp }}/ntl-a
+        run: ./target/debug/ntl init
+      - name: Two nodes exchange an acknowledged signal
+        run: |
+          set -euo pipefail
+          export LISTENER="${{ runner.temp }}/ntl-b"
+          NTL_HOME="$LISTENER" ./target/debug/ntl init
+          NTL_HOME="$LISTENER" ./target/debug/ntl listen \
+            --listen 127.0.0.1:14433 > listener.log 2>&1 &
+          LISTENER_PID=$!
+          sleep 2
+
+          NTL_HOME="${{ runner.temp }}/ntl-a" ./target/debug/ntl emit \
+            --type data --payload '{"ci":true}' --acknowledged \
+            --peer 127.0.0.1:14433 --wait 8 | tee emitter.log
+
+          kill "$LISTENER_PID" || true
+          echo "--- listener ---"
+          cat listener.log
+
+          # The receipt is the whole point: it proves the loop closed and a
+          # weight was updated from a real delivery outcome.
+          grep -q "receipt delivered" emitter.log \
+            || { echo "::error::no receipt returned; the delivery loop is broken"; exit 1; }
+      - name: The learning demo separates the peers
+        run: |
+          set -euo pipefail
+          cargo run -p ntl-example-two-node-learning | tee demo.log
+          grep -q "The refusing peer lost weight" demo.log \
+            || { echo "::error::the demo did not demonstrate learning"; exit 1; }
+
+  benchmarks:
+    name: Benchmarks compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Compile-only: benchmark timings on shared runners are too noisy to
+      # gate on, but a benchmark that stops compiling is still a broken build.
+      - run: cargo build --benches --workspace

@@ -153,6 +153,40 @@ impl Node {
         Ok(signal)
     }
 
+    /// Plan forwarding for a signal this node emitted itself.
+    ///
+    /// Distinct from [`Self::receive`] because [`Self::emit`] already claimed
+    /// the signal in the dedup cache — running it back through `receive`
+    /// would see its own claim and drop it. A local emission also skips
+    /// admission control: the node chose to send this, so throttling itself
+    /// on its own traffic would be backwards.
+    ///
+    /// # Errors
+    /// Returns an error if the store is unavailable.
+    pub fn receive_local(&self, signal: &Signal) -> crate::Result<Disposition> {
+        let now = self.clock.now_ns();
+        #[allow(clippy::cast_possible_truncation)]
+        let hops = signal.trace.len() as u16;
+
+        if let Err(reason) =
+            propagation::check_propagable(signal, &self.identity, &self.config.propagation)
+        {
+            return Ok(Disposition::refuse(signal, reason, hops));
+        }
+
+        let forward_to = self.plan_forwarding(signal, None, now)?;
+        if forward_to.is_empty() && signal.requires_receipt() {
+            return Ok(Disposition::refuse(signal, RejectReason::NoRoute, hops));
+        }
+
+        Ok(Disposition {
+            forward_to,
+            handle_locally: Vec::new(),
+            receipt: None,
+            rejected: None,
+        })
+    }
+
     /// Decide what to do with an arriving signal.
     ///
     /// Applies the propagation rules in cheapest-first order — size and TTL,
@@ -194,6 +228,7 @@ impl Node {
 
         let queued = QueuedSignal {
             id: signal.id,
+            origin: signal.origin.clone(),
             weight: signal.weight,
             delivery: signal.delivery,
             enqueued_at_ns: now,
@@ -256,8 +291,7 @@ impl Node {
         let synapses: Vec<Synapse> = records
             .iter()
             .map(|r| {
-                let mut s =
-                    Synapse::from_record(r, self.identity.clone(), self.synapse_config());
+                let mut s = Synapse::from_record(r, self.identity.clone(), self.synapse_config());
                 s.weight = s.decayed_weight(now_ns, self.learning());
                 s
             })
@@ -287,6 +321,7 @@ impl Node {
                 synapse: c.synapse.id.clone(),
                 peer: c.synapse.remote_node.clone(),
                 score: c.score,
+                signal_weight: signal.weight,
                 explored: c.explored,
                 decided_at_ns: now_ns,
                 outcome: Outcome::Pending,
@@ -425,7 +460,7 @@ impl Node {
 
         let update = synapse.apply_outcome(
             outcome,
-            entry.score.clamp(0.0, 1.0),
+            entry.signal_weight.clamp(0.0, 1.0),
             &type_name,
             influence_used,
             learning_cfg,
@@ -433,12 +468,7 @@ impl Node {
 
         if update.applied_delta.abs() > f32::EPSILON {
             self.store
-                .record_influence(
-                    &entry.peer,
-                    update.applied_delta,
-                    now_ns,
-                    window_start,
-                )
+                .record_influence(&entry.peer, update.applied_delta, now_ns, window_start)
                 .map_err(|e| crate::Error::Serialization(e.to_string()))?;
         }
 
@@ -497,7 +527,6 @@ impl Node {
         self.store
             .put_synapse(&synapse.to_record())
             .map_err(|e| crate::Error::Serialization(e.to_string()))
-            .map_err(Into::into)
     }
 
     /// Register or update a synapse to a peer.
@@ -546,6 +575,23 @@ impl Node {
         Ok(record)
     }
 
+    /// Release any signals the activation queue has held past its latency
+    /// guard.
+    ///
+    /// Backpressure must be a delay, not an indefinite hold. The guard inside
+    /// `receive` can only act when another signal arrives, so a node whose
+    /// traffic goes quiet needs this called periodically — otherwise a
+    /// below-threshold signal waits forever and its sender times out on a
+    /// path that was working.
+    ///
+    /// # Errors
+    /// Returns an error if the activation lock is poisoned.
+    pub fn poll_activation(&self) -> crate::Result<Vec<QueuedSignal>> {
+        let now = self.clock.now_ns();
+        let mut gate = self.activation.lock().map_err(|_| crate::Error::Shutdown)?;
+        Ok(gate.drain_if_starving(now))
+    }
+
     /// Persist the activation snapshot.
     ///
     /// # Errors
@@ -565,7 +611,6 @@ impl Node {
         self.store
             .flush()
             .map_err(|e| crate::Error::Serialization(e.to_string()))
-            .map_err(Into::into)
     }
 
     /// Health of the routing model, for observability.
@@ -738,7 +783,7 @@ impl NodeBuilder {
             None => {
                 return Err(crate::Error::Config(
                     "a clock must be supplied on this target".to_string(),
-                ))
+                ));
             }
         };
 
@@ -753,12 +798,13 @@ impl NodeBuilder {
                     .map_err(|e| crate::Error::Config(e.to_string()))?;
                 id
             }
-            None => match store
-                .get_meta("node-id")
-                .map_err(|e| crate::Error::Config(e.to_string()))?
-            {
-                Some(bytes) => NodeId(bytes),
-                None => {
+            None => {
+                if let Some(bytes) = store
+                    .get_meta("node-id")
+                    .map_err(|e| crate::Error::Config(e.to_string()))?
+                {
+                    NodeId(bytes)
+                } else {
                     let mut seed = SplitMix64::seeded(now);
                     let mut bytes = Vec::with_capacity(32);
                     for _ in 0..4 {
@@ -769,7 +815,7 @@ impl NodeBuilder {
                         .map_err(|e| crate::Error::Config(e.to_string()))?;
                     NodeId(bytes)
                 }
-            },
+            }
         };
 
         let rng = self
@@ -812,5 +858,4 @@ pub fn has_seen(store: &dyn NodeStore, id: &SignalId, now_ns: u64) -> crate::Res
     store
         .has_seen(id, now_ns)
         .map_err(|e| crate::Error::Serialization(e.to_string()))
-        .map_err(Into::into)
 }

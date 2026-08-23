@@ -8,9 +8,15 @@ pub enum AdapterHealth {
     /// Operating normally.
     Healthy,
     /// Partial functionality.
-    Degraded { reason: String },
+    Degraded {
+        /// Why the adapter is degraded.
+        reason: String,
+    },
     /// Not functioning.
-    Unhealthy { reason: String },
+    Unhealthy {
+        /// Why the adapter is unhealthy.
+        reason: String,
+    },
 }
 
 /// Capabilities an adapter can declare.
@@ -63,9 +69,16 @@ pub enum Protocol {
 /// Adapters bridge NTL's signal-based transport with external protocols.
 pub trait Adapter: Send + Sync {
     /// Translate an external payload into an NTL signal.
+    ///
+    /// # Errors
+    /// Returns an error if the payload cannot be represented as a signal.
     fn ingest(&self, external: ExternalPayload) -> crate::Result<Signal>;
 
     /// Translate an NTL signal into an external payload.
+    ///
+    /// # Errors
+    /// Returns an error if the signal cannot be represented in the external
+    /// protocol.
     fn emit(&self, signal: Signal) -> crate::Result<ExternalPayload>;
 
     /// The external protocol this adapter speaks.

@@ -8,34 +8,45 @@ mode: "wide"
 ---
 NTL development follows a phased approach, from specification to production readiness.
 
-## Phase 0: Foundation (Current)
+## Phase 0: Foundation
 
-**Status:** In Progress
+**Status:** Complete
 
 - [x] Core concept definition
 - [x] Documentation skeleton (Mintlify)
-- [ ] Protocol specification v0.1.0
-- [ ] Signal format finalization
-- [ ] Crypto interface specification
-- [ ] Repository structure and CI/CD
+- [x] Protocol specification v0.2.0-draft
+- [x] Signal format, including delivery class and receipts
+- [x] Crypto interface specification
+- [x] Learning model — reward signal, update rule, decay, exploration
+- [x] Threat model, with an explicit out-of-scope list
+- [x] Delivery semantics — best-effort and acknowledged classes
+- [x] Storage interface — pluggable, no named database
+- [x] Repository structure and CI
 
 **Goal:** A complete, reviewable specification that any team could implement.
 
-## Phase 1: Reference Implementation
+## Phase 1: Reference Implementation (Current)
 
-**Status:** Not Started
+**Status:** In Progress
 
-- [ ] Signal encoding/decoding (CBOR)
-- [ ] Node identity and keypair management
-- [ ] Crypto module: post-quantum default (Dilithium + Kyber)
-- [ ] Crypto module: classical (Ed25519 + X25519)
-- [ ] Synapse formation and handshake
-- [ ] Basic propagation engine (Weighted scope)
-- [ ] Activation gate (Step function)
-- [ ] CLI tooling (`ntl init`, `ntl start`, `ntl emit`, `ntl listen`)
-- [ ] Test network with bootstrap nodes
+- [x] Signal encoding/decoding (CBOR)
+- [x] Node identity and keypair management, persisted across restarts
+- [x] Crypto module: classical (Ed25519)
+- [ ] Crypto module: post-quantum (Dilithium + Kyber)
+- [x] Pluggable storage: `NodeStore` trait, SQLite backend, conformance suite
+- [x] Synapse formation and signed handshake
+- [x] Propagation engine with stochastic path selection
+- [x] Activation gate — batched firing, bounded queue, latency guard
+- [x] Learning loop — receipts, timeout sweep, influence caps, normalisation
+- [x] CLI tooling (`ntl init`, `start`, `emit`, `listen`, `synapses`, `status`, `topology`)
+- [x] `ntl-node` and `ntl-edge` binaries
+- [x] Two-node learning demonstration
+- [x] Benchmarks and CI, including a wasm32 build check on `ntl-core`
+- [ ] QUIC transport (currently TCP with length-prefixed CBOR)
+- [ ] Public test network with bootstrap nodes
 
-**Goal:** A working Rust implementation that can form a network and propagate signals.
+**Goal:** A working Rust implementation that can form a network and propagate
+signals. Two nodes on one machine already do.
 
 ## Phase 2: Adapters and Integration
 

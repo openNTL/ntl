@@ -1,0 +1,30 @@
+[package]
+name = "ntl-net"
+description = "Transport and runtime driver for the Neural Transfer Layer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# The async runtime and transport live here rather than in ntl-core, which
+# holds no runtime assumptions and must build for wasm32.
+[dependencies]
+ntl-core.workspace = true
+ntl-store-sqlite.workspace = true
+tokio = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_cbor.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[lints]
+workspace = true

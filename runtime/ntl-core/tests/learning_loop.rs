@@ -10,7 +10,7 @@ use ntl_core::delivery::{DeliveryClass, Receipt, RejectReason};
 use ntl_core::learning::DeploymentClass;
 use ntl_core::signal::{NodeId, Signal};
 use ntl_core::store::{Outcome, SynapseFilter};
-use ntl_core::testing::{test_node, test_node_id, test_node_with_config, TEST_EPOCH_NS};
+use ntl_core::testing::{TEST_EPOCH_NS, test_node, test_node_id, test_node_with_config};
 use ntl_core::{NodeConfig, NodeStore};
 
 /// Wire a node up to `n` peers and return their identities.
@@ -299,8 +299,11 @@ fn a_failing_path_is_deprioritised_but_still_reachable() {
         for f in node.receive(&arrived, None).expect("receive").forward_to {
             if f.peer == bad {
                 bad_tried += 1;
-                node.apply_receipt(&Receipt::rejected(arrived.id, RejectReason::NoRoute, 1), &f.peer)
-                    .expect("apply");
+                node.apply_receipt(
+                    &Receipt::rejected(arrived.id, RejectReason::NoRoute, 1),
+                    &f.peer,
+                )
+                .expect("apply");
             } else {
                 node.apply_receipt(&Receipt::delivered(arrived.id, 1), &f.peer)
                     .expect("apply");
@@ -375,9 +378,7 @@ fn influence_cap_bounds_a_single_peer() {
         .store()
         .influence_since(
             &attacker,
-            node.config()
-                .learning
-                .influence_window_start(node.now_ns()),
+            node.config().learning.influence_window_start(node.now_ns()),
         )
         .expect("influence");
 
@@ -398,7 +399,10 @@ fn dedup_stops_a_signal_being_processed_twice() {
     let first = node.receive(&arrived, None).expect("receive");
     let second = node.receive(&arrived, None).expect("receive");
 
-    assert!(!first.forward_to.is_empty(), "the first arrival should route");
+    assert!(
+        !first.forward_to.is_empty(),
+        "the first arrival should route"
+    );
     assert!(
         second.forward_to.is_empty() && second.handle_locally.is_empty(),
         "a repeat arrival must be dropped, or cyclic topologies loop forever"
@@ -417,9 +421,7 @@ fn a_signal_is_never_sent_back_where_it_came_from() {
         .id;
 
     for i in 0..30u8 {
-        let signal = node
-            .emit(Signal::data("q").with_weight(0.9))
-            .expect("emit");
+        let signal = node.emit(Signal::data("q").with_weight(0.9)).expect("emit");
         let arrived = incoming(&signal, 100 + i);
         let disposition = node.receive(&arrived, Some(&arrival)).expect("receive");
         assert!(
@@ -451,7 +453,9 @@ fn an_acknowledged_signal_with_no_route_gets_a_negative_receipt() {
 fn a_best_effort_signal_with_no_route_fails_silently() {
     let (node, _clock) = test_node(212);
 
-    let signal = node.emit(Signal::data("telemetry").with_weight(0.9)).expect("emit");
+    let signal = node
+        .emit(Signal::data("telemetry").with_weight(0.9))
+        .expect("emit");
     let arrived = incoming(&signal, 9);
     let disposition = node.receive(&arrived, None).expect("receive");
 
@@ -621,7 +625,8 @@ fn a_signature_failure_costs_more_than_a_timeout() {
         .id;
 
     let before = weight_of(&node, &peers[0]);
-    node.penalize_signature_failure(&synapse_id).expect("penalize");
+    node.penalize_signature_failure(&synapse_id)
+        .expect("penalize");
     let after = weight_of(&node, &peers[0]);
 
     assert!(
