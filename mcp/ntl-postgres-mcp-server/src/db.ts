@@ -28,6 +28,45 @@ export interface ExecutorOptions {
 }
 
 /**
+ * Thrown when a multi-statement script is attempted inside a read-only
+ * transaction.
+ *
+ * `exec()` uses the simple query protocol, which honours transaction control:
+ * a script starting `COMMIT;` would end the read-only transaction and run
+ * everything after it read-write, auto-committing each statement. The caller
+ * is meant to gate on `allowWrites` before ever reaching here — this is the
+ * second layer, so a future caller that forgets gets an exception rather than
+ * a silent bypass.
+ */
+export class ExecInReadOnlyTransactionError extends Error {
+  constructor() {
+    super(
+      "Multi-statement scripts are not available in a read-only transaction. " +
+        "The simple query protocol honours transaction control, so a script " +
+        "could commit its way out of read-only mode. Run one statement at a " +
+        "time, or enable writes.",
+    );
+    this.name = "ExecInReadOnlyTransactionError";
+  }
+}
+
+/**
+ * Force the extended query protocol on a `postgres.js` `unsafe()` call.
+ *
+ * postgres.js infers the protocol from the argument count — with an empty
+ * parameter array it defaults to `simple: true` — and the simple protocol both
+ * accepts multiple commands and honours transaction control. Pinning it off is
+ * what makes a read-only transaction unescapable; see safety.ts.
+ *
+ * Cast because `simple` is absent from `UnsafeQueryOptions` in the shipped
+ * type definitions even though `unsafe()` reads it (src/index.js: `simple:
+ * 'simple' in options ? options.simple : args.length === 0`). Asserted by the
+ * escape tests in test/safety.test.ts, so a postgres.js upgrade that renamed
+ * the option would fail the suite rather than silently reopen the hole.
+ */
+const EXTENDED_PROTOCOL = { simple: false } as unknown as postgres.UnsafeQueryOptions;
+
+/**
  * Production executor over `postgres.js`.
  */
 export class PostgresExecutor implements SqlExecutor {
@@ -35,14 +74,18 @@ export class PostgresExecutor implements SqlExecutor {
   private readonly options: ExecutorOptions;
   /** True when this instance wraps a transaction and must not be closed. */
   private readonly borrowed: boolean;
+  /** True when this instance wraps a read-only transaction. */
+  private readonly readOnlyTx: boolean;
 
   constructor(
     connectionString: string,
     options: ExecutorOptions,
     existing?: postgres.Sql,
+    readOnlyTx = false,
   ) {
     this.options = options;
     this.borrowed = existing !== undefined;
+    this.readOnlyTx = readOnlyTx;
     this.sql =
       existing ??
       postgres(connectionString, {
@@ -61,7 +104,14 @@ export class PostgresExecutor implements SqlExecutor {
   }
 
   async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
-    const rows = await this.sql.unsafe(sql, params as never[]);
+    // `simple: false` is load-bearing, not tidiness. postgres.js picks the
+    // protocol from the argument count — `unsafe(sql, [])` defaults to
+    // `simple: true` — and the simple query protocol accepts multiple commands
+    // *and honours transaction control*. Inside a read-only transaction that
+    // means `COMMIT; DROP TABLE t` would end the transaction and run the rest
+    // read-write. The extended protocol accepts exactly one command, so
+    // Postgres itself refuses the smuggled statement with SQLSTATE 42601.
+    const rows = await this.sql.unsafe(sql, params as never[], EXTENDED_PROTOCOL);
     return {
       rows: rows as unknown as QueryResult["rows"],
       rowCount: rows.count ?? rows.length,
@@ -72,6 +122,7 @@ export class PostgresExecutor implements SqlExecutor {
   }
 
   async exec(script: string): Promise<void> {
+    if (this.readOnlyTx) throw new ExecInReadOnlyTransactionError();
     // No params, so postgres.js uses the simple query protocol, which accepts
     // multiple statements.
     await this.sql.unsafe(script);
@@ -84,7 +135,9 @@ export class PostgresExecutor implements SqlExecutor {
       await tx.unsafe(
         `SET LOCAL statement_timeout = ${this.options.statementTimeoutMs}`,
       );
-      return fn(new PostgresExecutor("", this.options, tx as unknown as postgres.Sql));
+      return fn(
+        new PostgresExecutor("", this.options, tx as unknown as postgres.Sql, true),
+      );
     }) as Promise<T>;
   }
 
@@ -138,11 +191,18 @@ export class PgliteExecutor implements SqlExecutor {
   private readonly db: PgliteLike;
   private readonly options: ExecutorOptions;
   private readonly borrowed: boolean;
+  private readonly readOnlyTx: boolean;
 
-  constructor(db: PgliteLike, options: ExecutorOptions, borrowed = false) {
+  constructor(
+    db: PgliteLike,
+    options: ExecutorOptions,
+    borrowed = false,
+    readOnlyTx = false,
+  ) {
     this.db = db;
     this.options = options;
     this.borrowed = borrowed;
+    this.readOnlyTx = readOnlyTx;
   }
 
   async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
@@ -155,13 +215,14 @@ export class PgliteExecutor implements SqlExecutor {
   }
 
   async exec(script: string): Promise<void> {
+    if (this.readOnlyTx) throw new ExecInReadOnlyTransactionError();
     await this.db.exec(script);
   }
 
   async readOnly<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
     await this.db.exec("BEGIN TRANSACTION READ ONLY");
     try {
-      const out = await fn(new PgliteExecutor(this.db, this.options, true));
+      const out = await fn(new PgliteExecutor(this.db, this.options, true, true));
       await this.db.exec("COMMIT");
       return out;
     } catch (error) {

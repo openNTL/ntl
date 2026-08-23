@@ -13,7 +13,7 @@ knows this one.
 
 ```
 npm install
-npm test                  # 149 tests, real Postgres, no mocks
+npm test                  # 167 tests, real Postgres, no mocks
 npx wrangler deploy
 ```
 
@@ -39,8 +39,30 @@ statements write, so read-only tools run inside `BEGIN TRANSACTION READ ONLY`
 and the *database* rejects the write with SQLSTATE 25006. There is nothing for
 a cleverly-phrased statement to slip past.
 
-[`test/safety.test.ts`](test/safety.test.ts) fires 16 real bypasses at it and
-then asserts the data is untouched.
+There is exactly one way out of a transaction, and it is not clever phrasing —
+it is ending the transaction:
+
+```sql
+COMMIT; DROP TABLE ntl.synapses;
+```
+
+That works only over the *simple* query protocol, which accepts several
+commands in one string and honours transaction control. So the boundary is the
+protocol, not a check on the string: read-only queries are pinned to the
+extended protocol, which accepts exactly one command, and Postgres rejects the
+smuggled statement with SQLSTATE 42601 before it runs. The simple-protocol path
+throws if it is ever reached inside a read-only transaction, and is only
+routed to when the operator has enabled writes.
+
+This is worth dwelling on if you copy the file, because an earlier version of
+it had the hole: `COMMIT; DROP TABLE canary` returned *success* on both
+drivers, and the trailing `COMMIT` that should have complained produced only a
+notice, which was being swallowed. The transaction was doing its job; the
+protocol underneath it was not.
+
+[`test/safety.test.ts`](test/safety.test.ts) fires 16 blocklist bypasses and 8
+transaction escapes at it, and after each one asserts the data is untouched
+rather than merely that an error came back.
 
 **2. Writes off by default.**
 
@@ -160,6 +182,23 @@ timing-safe.
 There is one unauthenticated route, `/health`, which reports nothing about the
 database.
 
+### Connect as a role that cannot write
+
+Read-only transactions bound what the *SQL* can do. They say nothing about what
+the *role* can do, so a bug in this server is still bounded by the grants on the
+credentials you hand it. Give the read-only deployment a role with no write
+grants:
+
+```sql
+CREATE ROLE ntl_mcp_ro LOGIN PASSWORD '…';
+GRANT USAGE ON SCHEMA ntl TO ntl_mcp_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA ntl TO ntl_mcp_ro;
+ALTER DEFAULT PRIVILEGES IN SCHEMA ntl GRANT SELECT ON TABLES TO ntl_mcp_ro;
+```
+
+Then the transaction and the grants have to both fail before anything is
+written. This costs nothing and is the difference between one layer and two.
+
 ### Enabling writes
 
 Writes are enabled per environment, not per request, so it is a deliberate act
@@ -200,6 +239,9 @@ Two assumptions here are Postgres-specific and will bite:
 - **`SET TRANSACTION READ ONLY`.** The whole safety model rests on the
   database enforcing it. If your engine has no equivalent, you do not have
   read-only mode — do not pretend otherwise by falling back to SQL parsing.
+  Check your driver's multi-statement behaviour too: a driver that quietly
+  batches commands over a protocol that honours `COMMIT` gives the transaction
+  away.
 
 ## Testing
 

@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ntl_core::crypto::{ClassicalModule, PublicKey};
 use ntl_core::delivery::Receipt;
@@ -94,6 +95,27 @@ pub enum Event {
     SignatureFailed {
         /// The peer that presented it.
         peer: NodeId,
+    },
+    /// A signal was dropped because no public key could be resolved for its
+    /// claimed origin, so its signature could not be checked at all.
+    ///
+    /// Distinct from [`Self::SignatureFailed`]: that is a signature that did
+    /// not verify, this is one that could not be verified. The peer that
+    /// relayed it is not necessarily at fault, so no synapse is penalised —
+    /// but an operator seeing a steady stream of these is looking at a node
+    /// whose neighbours are relaying traffic it has no way to authenticate.
+    OriginKeyUnknown {
+        /// The peer that relayed it.
+        peer: NodeId,
+        /// The origin it claimed.
+        origin: NodeId,
+    },
+    /// A signal verified but was structurally invalid.
+    Malformed {
+        /// The peer that presented it.
+        peer: NodeId,
+        /// Why it was rejected.
+        reason: String,
     },
 }
 
@@ -193,6 +215,33 @@ impl Runtime {
     /// Peers currently connected.
     pub async fn connected_peers(&self) -> Vec<NodeId> {
         self.sessions.read().await.keys().cloned().collect()
+    }
+
+    /// Wait until at least `count` peers have completed their handshake.
+    ///
+    /// Returns the number connected when it returned, which may be fewer than
+    /// `count` if the timeout elapsed first.
+    ///
+    /// A caller that dials and then immediately routes will find an empty
+    /// topology: `dial` returns once the TCP connection is open, but a peer is
+    /// not usable until the signed Discovery exchange has completed and its
+    /// synapse is in the store. Sleeping a fixed interval instead of waiting
+    /// for the event is a race — it passed locally and failed on a slower CI
+    /// runner, where 200ms was not enough.
+    pub async fn wait_for_peers(&self, count: usize, timeout: Duration) -> usize {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let connected = self.sessions.read().await.len();
+            if connected >= count {
+                return connected;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return connected;
+            }
+            // Polling rather than subscribing: the event channel is consumed by
+            // the caller, so taking events here would steal them.
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     /// Start listening, and return the bound address.
@@ -569,9 +618,10 @@ async fn read_loop(
             }
         };
 
-        // Verification comes after framing but before any routing work. The
-        // origin's key is known for a direct peer, and also for a relayed
-        // signal whose origin we happen to have a session with.
+        // Verification comes after framing but before any routing work, as
+        // Propagation Rule 5 requires. The origin's key is known for a direct
+        // peer, and also for a relayed signal whose origin we happen to have a
+        // session with.
         let origin_key = if signal.origin == peer.node_id {
             Some(peer.public_key.clone())
         } else {
@@ -581,20 +631,54 @@ async fn read_loop(
                 .get(&signal.origin)
                 .map(|s| s.public_key().clone())
         };
-        if let Some(key) = origin_key {
-            let ok =
-                ntl_core::crypto::verify_signal(&ClassicalModule, &signal, &key).unwrap_or(false);
-            if !ok {
-                if let Ok(Some(record)) = node.store().synapse_for_peer(&peer.node_id) {
-                    let _ = node.penalize_signature_failure(&record.id);
-                }
-                let _ = events
-                    .send(Event::SignatureFailed {
-                        peer: peer.node_id.clone(),
-                    })
-                    .await;
-                continue;
+
+        // An origin we cannot resolve a key for is a drop, not a pass. Letting
+        // it through would mean any connected peer could inject traffic under
+        // any identity it chose, which is precisely what the handshake's
+        // identity binding and the per-identity influence caps exist to
+        // prevent — and the incentive gradient would point the wrong way,
+        // since forging from a known origin costs a synapse penalty while
+        // forging from an unknown one would cost nothing.
+        //
+        // The price is that verified delivery is one hop today: a signal
+        // relayed from a node we have never met has no resolvable key. Fixing
+        // that needs key distribution, which is a wire-format question rather
+        // than a bug — see threat-model §8.
+        let Some(key) = origin_key else {
+            let _ = events
+                .send(Event::OriginKeyUnknown {
+                    peer: peer.node_id.clone(),
+                    origin: signal.origin.clone(),
+                })
+                .await;
+            continue;
+        };
+
+        let ok = ntl_core::crypto::verify_signal(&ClassicalModule, &signal, &key).unwrap_or(false);
+        if !ok {
+            if let Ok(Some(record)) = node.store().synapse_for_peer(&peer.node_id) {
+                let _ = node.penalize_signature_failure(&record.id);
             }
+            let _ = events
+                .send(Event::SignatureFailed {
+                    peer: peer.node_id.clone(),
+                })
+                .await;
+            continue;
+        }
+
+        // Structural validation comes after the signature: a signal with a
+        // weight outside [0, 1] or an expired TTL is malformed no matter who
+        // signed it, and the checks are cheap enough that the ordering is
+        // about clarity rather than cost.
+        if let Err(e) = signal.validate() {
+            let _ = events
+                .send(Event::Malformed {
+                    peer: peer.node_id.clone(),
+                    reason: e.to_string(),
+                })
+                .await;
+            continue;
         }
 
         // A receipt resolves one of our decisions rather than being routed on.

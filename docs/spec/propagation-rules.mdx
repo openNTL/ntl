@@ -70,6 +70,17 @@ compound, and a synapse accumulating
 `signature_failure_prune_threshold` (default 5) failures within one
 influence window MUST be pruned.
 
+**An unresolvable origin key is a drop, not a pass.** Verification needs the
+origin's public key, and a node ID is that key's hash, so the key cannot be
+derived from the identifier — a node holds it only for origins it has met. A
+node that cannot resolve the key MUST drop the signal. Forwarding it instead
+would let any connected peer inject traffic under any identity, at no cost,
+which defeats every per-identity bound in the protocol. Because the peer that
+relayed it is not necessarily at fault, this drop MUST NOT penalise the
+arriving synapse, and MUST be reported separately from a signature that failed
+to verify. See [threat-model](/spec/threat-model) §8 for the consequence: in
+the absence of key distribution, verified delivery is one hop.
+
 ### Rule 6: Outcome Journalling
 
 A node MUST journal every propagation decision it makes for an

@@ -82,6 +82,16 @@ pub async fn run_node(class: DeploymentClass, default_port: u16) -> Result<(), S
                     // louder level than the rest.
                     tracing::warn!(%peer, "signature verification failed; synapse penalized");
                 }
+                Some(Event::OriginKeyUnknown { peer, origin }) => {
+                    // Not necessarily the relaying peer's fault, but an
+                    // operator needs to see it: these signals are being
+                    // dropped, so a topology that produces them steadily is a
+                    // topology that is losing traffic.
+                    tracing::warn!(%peer, %origin, "dropped: no key for claimed origin");
+                }
+                Some(Event::Malformed { peer, reason }) => {
+                    tracing::warn!(%peer, %reason, "dropped: malformed signal");
+                }
                 Some(other) => tracing::debug!(?other, "event"),
                 None => return Ok(()),
             },

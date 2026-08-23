@@ -16,7 +16,7 @@ an attacker who cannot read your data may still be able to **teach your
 node** to send it somewhere useful to them.
 
 This document states what NTL defends against at this version, how, and —
-in [§8](#8-out-of-scope-at-v0-1) — what it does not. The out-of-scope
+in [§9](#9-out-of-scope-at-v0-1) — what it does not. The out-of-scope
 section is normative: an operator who deploys NTL against a threat listed
 there is unprotected, and needs to know that before deploying rather than
 after.
@@ -100,7 +100,7 @@ having *handled* it, earning positive reward for a path that discards
 traffic. This is a black-hole attack and it is only partly mitigated: the
 node has no way to verify handling actually occurred. Mitigation is
 statistical — such a peer accrues no downstream evidence and its affinity
-decays — and incomplete. See [§8](#8-out-of-scope-at-v0-1).
+decays — and incomplete. See [§9](#9-out-of-scope-at-v0-1).
 
 ## 3. Eclipse Attacks on Topology
 
@@ -237,7 +237,52 @@ A node MUST NOT place sensitive data in tags. Payload confidentiality is
 available through the crypto interface; **header confidentiality is not
 provided**. Traffic patterns are visible to any on-path node.
 
-## 8. Out of Scope at v0.1
+## 8. Origin Key Resolution
+
+[Propagation Rule 5](/spec/propagation-rules) requires a node to verify a
+signal's signature **before** processing or propagating it. Verification needs
+the origin's public key, and a node ID is `blake3(public_key)` — a one-way
+function, so the key cannot be recovered from the identifier.
+
+A node therefore knows an origin's key only if it has met that origin: the
+handshake carries the key and binds it to the claimed identity. This has a
+consequence that implementations MUST NOT paper over.
+
+**A node MUST drop a signal whose origin key it cannot resolve.** It MUST NOT
+process it, forward it, or act on it as a receipt.
+
+The temptation is to forward it anyway, since a relayed signal from a stranger
+looks like ordinary mesh traffic. That would be the cheapest attack in this
+document: any connected peer could inject signals under any identity, at no
+cost. Every mitigation in §1 through §4 is built on a claimed origin meaning
+something. Worse, the incentive gradient would point straight at the hole —
+forging as a *known* origin costs the forger a signature-failure penalty (§4),
+while forging as an unknown one would cost nothing at all.
+
+So the honest statement of the current guarantee is:
+
+| Signal | Verified? |
+|---|---|
+| From a directly connected peer | Yes — key from the handshake |
+| Relayed, origin currently connected | Yes — key from that session |
+| Relayed, origin never met | **Dropped** |
+
+**Verified delivery is one hop in the reference implementation.** Multi-hop
+propagation works only between nodes that have each met the origin.
+
+Closing this needs key distribution, not a code fix. The obvious route is to
+carry the origin's public key in the signal: because the node ID is the key's
+hash, a recipient can check `blake3(carried_key) == origin` and then verify the
+signature, with no third party and no directory. That is self-authenticating,
+and it costs 32 bytes per signal. It is a wire-format change and so is deferred
+to a signal-format revision rather than smuggled in as a bug fix.
+
+Until then, an implementation MUST report dropped-for-unresolvable-origin
+separately from failed-signature. They are different events: the second
+identifies a misbehaving peer, the first only says the topology is carrying
+traffic this node cannot authenticate.
+
+## 9. Out of Scope at v0.1
 
 NTL does **not** defend against the following. Each is a real risk, listed
 so that operators are not surprised.
@@ -256,7 +301,7 @@ so that operators are not surprised.
 
 An implementation MUST NOT claim protection against anything in this table.
 
-## 9. Deployment Guidance
+## 10. Deployment Guidance
 
 | Environment | Recommendations |
 |---|---|
@@ -269,9 +314,9 @@ The strongest available mitigation is an **identity allowlist at synapse
 formation**. Where deployment permits it, most of this document ceases to
 apply, because the adversary can no longer create identities freely.
 
-## 10. Reporting
+## 11. Reporting
 
 Report vulnerabilities per [SECURITY.md](https://github.com/openNTL/ntl/blob/main/SECURITY.md)
 — privately, to security@openntl.org. Attacks listed in
-[§8](#8-out-of-scope-at-v0-1) are welcome as roadmap input but are not
+[§9](#9-out-of-scope-at-v0-1) are welcome as roadmap input but are not
 treated as vulnerabilities.

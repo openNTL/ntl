@@ -362,8 +362,30 @@ async fn cmd_emit(
     for peer in &peers {
         runtime.dial(*peer).await.map_err(|e| e.to_string())?;
     }
-    // Let the handshake complete before routing, or the topology looks empty.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Wait for the handshake, rather than sleeping and hoping. `dial` returns
+    // when the TCP connection opens, but a peer cannot carry a signal until the
+    // signed Discovery exchange has completed and its synapse is in the store.
+    // A fixed sleep here raced: it passed locally and failed on a slower CI
+    // runner, where the signal was routed to zero peers and the sender then
+    // reported a delivery failure for a network that was about to be fine.
+    let connected = runtime
+        .wait_for_peers(peers.len(), std::time::Duration::from_secs(10))
+        .await;
+    if connected == 0 {
+        return Err(format!(
+            "no peer completed a handshake within 10s (dialed {}). \
+             Check the address, and that the remote node is running.",
+            peers.len()
+        ));
+    }
+    if connected < peers.len() {
+        println!(
+            "  {} {connected} of {} peers connected; emitting anyway",
+            "!".yellow(),
+            peers.len()
+        );
+    }
 
     let mut builder = parse_type(signal_type)?
         .with_payload(parsed_payload)
@@ -506,7 +528,7 @@ fn cmd_synapses(home: &std::path::Path) -> Result<(), String> {
             "-".to_string()
         } else {
             let mut pairs: Vec<_> = s.type_affinity.iter().collect();
-            pairs.sort_by(|a, b| b.1.cmp(a.1));
+            pairs.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
             pairs
                 .iter()
                 .take(3)
@@ -746,6 +768,15 @@ fn print_event(event: &Event) {
         Event::SignatureFailed { peer } => println!(
             "{} signature verification failed from {peer} — synapse penalized",
             "!".red().bold()
+        ),
+        Event::OriginKeyUnknown { peer, origin } => println!(
+            "{} dropped a signal relayed by {peer}: no public key known for its \
+             claimed origin {origin}, so its signature could not be checked",
+            "!".yellow()
+        ),
+        Event::Malformed { peer, reason } => println!(
+            "{} dropped a malformed signal from {peer}: {reason}",
+            "!".yellow()
         ),
     }
 }

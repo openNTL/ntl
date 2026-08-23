@@ -13,8 +13,11 @@ import { DEFAULT_MAX_ROWS } from "../constants.js";
 import { failFromError, jsonSafe, respond, rowsToMarkdown } from "../format.js";
 import type { ToolOutput } from "../format.js";
 import {
+  explainMultiStatementRefusal,
   explainReadOnlyViolation,
   isReadOnlyViolation,
+  isSyntaxError,
+  looksMultiStatement,
   quoteIdent,
 } from "../safety.js";
 import type { SqlExecutor } from "../types.js";
@@ -67,9 +70,21 @@ export async function executeSql(
   const run = async (tx: SqlExecutor): Promise<ToolOutput> => {
     // A parameterised statement must go through the extended protocol, which
     // accepts exactly one command. Without params an agent may reasonably
-    // paste several, so those take the simple protocol instead.
+    // paste several, so those take the simple protocol instead —
+    // **but only when writes are enabled**.
+    //
+    // The simple query protocol honours transaction control. In read-only mode
+    // the safety boundary *is* the enclosing `BEGIN TRANSACTION READ ONLY`, so
+    // a script whose first statement is `COMMIT;` would end that transaction
+    // and run everything after it read-write, auto-committing as it went — and
+    // postgres.js' own trailing `commit` would then raise only a "no
+    // transaction in progress" notice, which is swallowed, so the tool would
+    // report success. Read-only therefore never takes this path; it goes
+    // through the extended protocol, which accepts exactly one command.
     const looksLikeScript =
-      args.params.length === 0 && /;\s*\S/.test(args.query.trim().replace(/;\s*$/, ""));
+      allowWrites &&
+      args.params.length === 0 &&
+      /;\s*\S/.test(args.query.trim().replace(/;\s*$/, ""));
 
     if (looksLikeScript) {
       await tx.exec(args.query);
@@ -120,6 +135,15 @@ export async function executeSql(
     if (isReadOnlyViolation(error)) {
       return {
         content: [{ type: "text", text: explainReadOnlyViolation() }],
+        isError: true,
+      };
+    }
+    // Postgres' own wording for this is "cannot insert multiple commands into
+    // a prepared statement", which tells an agent nothing about what to do.
+    // Purely a message improvement: the refusal itself came from the database.
+    if (!allowWrites && isSyntaxError(error) && looksMultiStatement(args.query)) {
+      return {
+        content: [{ type: "text", text: explainMultiStatementRefusal() }],
         isError: true,
       };
     }

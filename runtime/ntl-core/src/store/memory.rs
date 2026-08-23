@@ -335,7 +335,7 @@ impl NodeStore for MemoryStore {
             .filter(|e| signal_type.is_none_or(|want| &e.signal_type == want))
             .cloned()
             .collect();
-        out.sort_by(|a, b| b.decided_at_ns.cmp(&a.decided_at_ns));
+        out.sort_by_key(|e| std::cmp::Reverse(e.decided_at_ns));
         out.truncate(limit);
         Ok(out)
     }
