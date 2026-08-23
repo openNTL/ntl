@@ -35,22 +35,32 @@ NTL is a neural transfer layer — a fundamentally new approach to moving data b
 ## Where NTL Sits in the Stack
 
 ```text
-┌─────────────────────────────────┐
-│         Applications            │
-│      (Mukoko, dApps, AI)        │
-├─────────────────────────────────┤
-│     Neural Transfer Layer       │  ← You are here
-│    (Neural Signal Transport)    │
-├─────────────────────────────────┤
-│          SiafuDB                │
-│   (Swarm-based Graph Storage)   │
-├─────────────────────────────────┤
-│     Network / Hardware          │
-│   (TCP/UDP/QUIC substrate)      │
-└─────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                  Applications                     │
+│               (Mukoko, dApps, AI)                 │
+├───────────────────────────────────────────────────┤
+│             Neural Transfer Layer                 │  ← You are here
+│              (Signal Transport)                   │
+├───────────────────────────────────────────────────┤
+│                 Storage Layer                     │
+│   pluggable: SQLite │ Postgres │ graph DB │ KV    │
+├───────────────────────────────────────────────────┤
+│               Network / Hardware                  │
+│              (TCP/UDP/QUIC substrate)             │
+└───────────────────────────────────────────────────┘
 ```
 
-NTL pairs with [SiafuDB](https://siafudb.org) to form a complete nervous system — NTL moves signals, SiafuDB remembers them. Together they replace the traditional API \+ database architecture with something native to AI, decentralized, and quantum-ready.
+**NTL moves signals; your storage layer remembers them.**
+
+Storage is an interface, not a dependency. A node persists its synapse
+weights, topology knowledge, and learning journal through the
+[storage interface](/spec/storage-interface) — and any database that
+satisfies that contract will do. The default is SQLite: one file, no
+configuration, and it runs on a phone.
+
+That is deliberate. NTL is only useful if you can run it on infrastructure
+you already trust, so nothing in the protocol privileges a particular
+database. See [storage backends](/guides/storage-backends).
 
 ## Quick Start
 
@@ -77,14 +87,14 @@ NTL pairs with [SiafuDB](https://siafudb.org) to form a complete nervous system 
 NTL is stewarded by [The Bundu Foundation](https://www.bundu.org), an open source foundation building infrastructure for African markets and beyond.
 
 **Official Maintainers:**
-- **The Bundu Foundation** — Owner and steward of NTL and SiafuDB
+- **The Bundu Foundation** — Owner and steward of NTL
 - **Nyuchi Web Services** — Engineering and reference implementation
 - **Nyuchi Africa** — Core maintainer and contributor
 - **Mukoko Africa** — Core maintainer and contributor
 
 **Ecosystem:**
-- **SiafuDB** — Companion storage layer
-- **Mukoko** — Application platform built on NTL \+ SiafuDB
+- **SiafuDB** — Ecosystem graph-storage backend
+- **Mukoko** — Application platform built on NTL
 
 ## License
 

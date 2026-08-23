@@ -89,7 +89,7 @@ If connectivity drops below a threshold, the node re-contacts bootstrap nodes to
 NTL topology is inherently resilient:
 
 - **Node failure** — When a node goes offline, its synapses weaken and prune. Signals automatically route through alternative paths. No global reconfiguration needed.
-- **Network partition** — Partitioned segments continue operating independently. When connectivity restores, synapses reform and state reconciles through SiafuDB's CRDT-based sync.
+- **Network partition** — Partitioned segments continue operating independently. When connectivity restores, synapses reform and each node relearns from the traffic it then observes. NTL provides no cross-node state reconciliation of its own; a backend offering CRDT-based sync can supply it.
 - **Adversarial nodes** — Nodes that emit invalid signals or refuse to propagate develop weak synapses and get naturally isolated by the topology.
 
 ## Privacy

@@ -24,19 +24,19 @@ NTL introduces:
 ## Architecture
 
 ```
-┌─────────────────────────────────┐
-│         Applications            │
-│      (Mukoko, dApps, AI)        │
-├─────────────────────────────────┤
-│     Neural Transfer Layer       │  ← This project
-│    (Neural Signal Transport)    │
-├─────────────────────────────────┤
-│          SiafuDB                │
-│   (Swarm-based Graph Storage)   │
-├─────────────────────────────────┤
-│     Network / Hardware          │
-│   (TCP/UDP/QUIC substrate)      │
-└─────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                  Applications                     │
+│               (Mukoko, dApps, AI)                 │
+├───────────────────────────────────────────────────┤
+│             Neural Transfer Layer                 │  ← This project
+│              (Signal Transport)                   │
+├───────────────────────────────────────────────────┤
+│                 Storage Layer                     │
+│   pluggable: SQLite │ Postgres │ graph DB │ KV    │
+├───────────────────────────────────────────────────┤
+│               Network / Hardware                  │
+│              (TCP/UDP/QUIC substrate)             │
+└───────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -71,7 +71,7 @@ Full documentation is available at [openntl.org](https://openntl.org).
 
 ### Run the docs locally
 
-The Mintlify dev server for NTL is pinned to **port 11200** so it can run alongside the SiafuDB docs (port 11300).
+The Mintlify dev server for NTL is pinned to **port 11200** so it can run alongside sibling project docs (port 11300).
 
 ```bash
 cd docs
@@ -119,7 +119,7 @@ NTL is stewarded by [The Bundu Foundation](https://www.bundu.org), an open sourc
 | [Nyuchi Web Services](https://nws.nyuchi.com) | Engineering, reference implementation |
 | [Nyuchi Africa](https://www.nyuchi.com) | Core maintainer |
 | [Mukoko Africa](https://mukoko.com) | Core maintainer |
-| [SiafuDB](https://siafudb.org) | Companion storage layer |
+| [SiafuDB](https://siafudb.org) | Ecosystem graph-storage backend |
 | [Mukoko](https://mukoko.com) | Application platform |
 
 ## License

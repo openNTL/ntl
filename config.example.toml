@@ -42,17 +42,48 @@ affinity_factor = 0.3
 recency_factor = 0.1
 
 [activation]
+node_class = "edge"           # edge | standard | server | infrastructure
 base_threshold = 0.5
 activation_function = "step"  # step, sigmoid, leaky
-refractory_period_ms = 10
+refractory_period_ms = 10     # 0 disables; see spec/activation-model
 max_potential = 10.0
 dynamic_threshold = true
+fire_batch_size = 8           # signals drained per fire; MUST be >= 1
+max_queue_depth = 256
+overflow_policy = "drop_lowest_weight"
 
-# Optional: SiafuDB integration
-# [siafu]
-# enabled = true
-# data_dir = "~/.ntl/siafu"
-# sync_mode = "eventual"
+# Storage backend (required)
+#   Everything the node remembers — synapse weights, topology, dedup cache,
+#   learning journal — goes through a pluggable backend.
+#   See https://openntl.org/guides/storage-backends
+[storage]
+backend = "sqlite"              # sqlite | postgres | memory
+path = "~/.ntl/node.db"         # sqlite: a single file
+journal_mode = "wal"            # sqlite: keeps readers unblocked by writers
+synchronous = "normal"          # sqlite: normal | full | off
+retain_signal_history = false   # off by default — payloads are sensitive
+
+# Alternative: PostgreSQL (planned)
+# [storage]
+# backend = "postgres"
+# url = "postgres://ntl@localhost/ntl"
+# schema = "ntl"
+
+# Alternative: in-memory, for tests and ephemeral nodes. Nothing survives exit.
+# [storage]
+# backend = "memory"
+
+# Learning model — see https://openntl.org/spec/learning-model
+[learning]
+enabled = true
+learning_rate = 0.05            # eta
+decay_half_life_hours = 168     # 7 days (edge default)
+exploration_temperature = 0.15  # tau; MUST stay above min_temperature
+min_temperature = 0.02          # a node that stops exploring stops learning
+receipt_window_secs = 30        # unresolved decisions time out after this
+max_total_outbound_weight = 8.0 # W_max; bounds weight inflation
+influence_cap_per_peer = 0.20   # C; bounds weight poisoning per identity
+influence_window_secs = 3600
 
 # Optional: Web2 adapter
 # [adapter.web2]

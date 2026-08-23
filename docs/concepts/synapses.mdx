@@ -15,7 +15,7 @@ A **synapse** is a persistent, stateful, weighted connection between two NTL nod
 | Lifetime | Per-request | Session duration | Persistent, evolving |
 | Direction | Client → Server | Bidirectional | Bidirectional |
 | Adaptation | None | None | Strengthens/weakens with use |
-| Memory | None | In-memory only | Persisted to SiafuDB |
+| Memory | None | In-memory only | Persisted to the storage backend |
 
 The key difference: **synapses learn.** A synapse that frequently carries successful signals becomes stronger, meaning it gets priority for future signal propagation. A synapse that goes unused weakens and eventually prunes. This mirrors Hebbian learning in neuroscience — connections that fire together wire together.
 
@@ -112,7 +112,7 @@ new_weight = current_weight * (1.0 - decay_rate)
 When a synapse's weight drops below the **dormancy threshold** (configurable, default 0.01), it enters a dormant state. Dormant synapses:
 
 - Stop actively transmitting signals
-- Retain their state in SiafuDB
+- Retain their state in the storage backend
 - Can be reactivated if the remote node sends a signal
 
 ### 7. Pruning
