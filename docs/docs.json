@@ -11,7 +11,7 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/nyuchi-ntl/ntl"
+        "href": "https://github.com/openNTL/ntl"
       },
       {
         "type": "discord",
@@ -139,7 +139,7 @@
   "footer": {
     "socials": {
       "x": "https://x.com/nyuchiafrica",
-      "github": "https://github.com/nyuchi-ntl",
+      "github": "https://github.com/openNTL",
       "linkedin": "https://linkedin.com/company/nyuchi-africa"
     }
   },

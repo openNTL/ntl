@@ -17,7 +17,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/nyuchi-ntl/ntl"
+repository = "https://github.com/openNTL/ntl"
 homepage = "https://openntl.org"
 authors = ["The Bundu Foundation <dev@openntl.org>"]
 rust-version = "1.85"
@@ -33,7 +33,7 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
-ulid = "1"
+ulid = { version = "1", features = ["serde"] }
 
 # Crypto
 blake3 = "1"

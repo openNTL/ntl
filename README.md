@@ -24,28 +24,39 @@ NTL introduces:
 ## Architecture
 
 ```
-┌─────────────────────────────────┐
-│         Applications            │
-│      (Mukoko, dApps, AI)        │
-├─────────────────────────────────┤
-│     Neural Transfer Layer       │  ← This project
-│    (Neural Signal Transport)    │
-├─────────────────────────────────┤
-│          SiafuDB                │
-│   (Swarm-based Graph Storage)   │
-├─────────────────────────────────┤
-│     Network / Hardware          │
-│   (TCP/UDP/QUIC substrate)      │
-└─────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                  Applications                     │
+│               (Mukoko, dApps, AI)                 │
+├───────────────────────────────────────────────────┤
+│             Neural Transfer Layer                 │  ← This project
+│              (Signal Transport)                   │
+├───────────────────────────────────────────────────┤
+│                 Storage Layer                     │
+│   pluggable: SQLite │ Postgres │ graph DB │ KV    │
+├───────────────────────────────────────────────────┤
+│               Network / Hardware                  │
+│              (TCP/UDP/QUIC substrate)             │
+└───────────────────────────────────────────────────┘
 ```
+
+**NTL moves signals; your storage layer remembers them.** Storage is a
+trait ([`NodeStore`](runtime/ntl-core/src/store/mod.rs)), not a dependency.
+The default backend is SQLite — a single file, zero configuration, and it
+runs on constrained edge devices. Full nodes can swap in PostgreSQL; graph
+and KV backends implement the same trait.
+
+NTL runs on the databases you already trust. See
+[storage backends](https://openntl.org/guides/storage-backends).
 
 ## Quick Start
 
-```bash
-# Install
-cargo install ntl-cli
+NTL is not yet published to crates.io. Build the CLI from a clone:
 
-# Initialize a node
+```bash
+git clone https://github.com/openNTL/ntl && cd ntl
+cargo install --path runtime/ntl-cli
+
+# Initialize a node — creates identity + SQLite store at ~/.ntl
 ntl init
 
 # Start (development mode)
@@ -56,6 +67,13 @@ ntl emit --type data --payload '{"hello": "world"}'
 
 # Listen for signals
 ntl listen
+```
+
+Want to see the network learn? Run the two-node demo, which prints synapse
+weights strengthening as signals repeat:
+
+```bash
+cargo run --example two-node-learning
 ```
 
 ## Documentation
@@ -73,21 +91,27 @@ Full documentation is available at [openntl.org](https://openntl.org).
 
 ```
 ntl/
-├── spec/               # Protocol specification documents
 ├── runtime/            # Rust reference implementation
-│   ├── ntl-core/       # Core library
+│   ├── ntl-core/       # Core library — pure Rust, no runtime assumptions
+│   ├── ntl-store-sqlite/    # Default storage backend
+│   ├── ntl-store-postgres/  # Full-node storage backend (stub)
 │   ├── ntl-cli/        # CLI tooling
 │   ├── ntl-node/       # Full node binary
-│   └── ntl-edge/       # Edge node (lightweight)
+│   └── ntl-edge/       # Edge node (lightweight, SQLite by default)
 ├── adapters/           # Protocol adapters
 │   ├── web2/           # HTTP, WebSocket, gRPC, GraphQL
 │   ├── web3/           # EVM chains, DID, tokens
 │   └── legacy/         # REST/SOAP wrapper
 ├── docs/               # Mintlify documentation source
+│   ├── spec/           # Protocol specification (normative)
+│   └── research/       # Design research and prior art
 ├── rfcs/               # Request for Comments
 ├── examples/           # Example applications
 └── benchmarks/         # Performance benchmarks
 ```
+
+The normative protocol specification lives in [`docs/spec/`](docs/spec/) and
+is published at [openntl.org/spec/overview](https://openntl.org/spec/overview).
 
 ## Project Status
 
@@ -109,7 +133,7 @@ NTL is stewarded by [The Bundu Foundation](https://www.bundu.org), an open sourc
 | [Nyuchi Web Services](https://nws.nyuchi.com) | Engineering, reference implementation |
 | [Nyuchi Africa](https://www.nyuchi.com) | Core maintainer |
 | [Mukoko Africa](https://mukoko.com) | Core maintainer |
-| [SiafuDB](https://siafudb.org) | Companion storage layer |
+| [SiafuDB](https://siafudb.org) | Ecosystem graph-storage backend |
 | [Mukoko](https://mukoko.com) | Application platform |
 
 ## License
