@@ -15,13 +15,14 @@ pub struct Migration {
 }
 
 /// The schema version this build understands.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 /// All migrations, in order.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    description: "initial schema",
-    sql: r"
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        description: "initial schema",
+        sql: r"
 -- Synapses: the learned model. Losing these discards everything the node
 -- learned, so they are unconditionally persisted.
 CREATE TABLE IF NOT EXISTS synapses (
@@ -120,4 +121,17 @@ CREATE TABLE IF NOT EXISTS signal_history (
     added_ns INTEGER NOT NULL
 );
 ",
-}];
+    },
+    Migration {
+        version: 2,
+        description: "signature-failure window on synapses",
+        sql: r"
+-- threat-model §4 requires pruning a synapse that accumulates
+-- `signature_failure_prune_threshold` failures within one influence window.
+-- A count over a window needs the count and the window's start persisted, or a
+-- restart is a free amnesty for an attacker mid-way to the threshold.
+ALTER TABLE synapses ADD COLUMN signature_failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE synapses ADD COLUMN failure_window_start_ns INTEGER NOT NULL DEFAULT 0;
+",
+    },
+];

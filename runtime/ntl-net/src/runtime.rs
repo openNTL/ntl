@@ -95,6 +95,25 @@ pub enum Event {
     SignatureFailed {
         /// The peer that presented it.
         peer: NodeId,
+        /// Whether this failure crossed the threshold and pruned the synapse.
+        pruned: bool,
+    },
+    /// An arriving signal's mutable headers exceeded this node's bounds and
+    /// were clamped.
+    ///
+    /// Worth surfacing rather than fixing silently: `weight` and `ttl` sit
+    /// outside the origin signature, so a clamp means the peer that handed
+    /// this over inflated them — which is a peer trying to win traffic or
+    /// extend a signal's life beyond what its origin asked for.
+    HeadersClamped {
+        /// The peer that handed it over.
+        peer: NodeId,
+        /// Which signal.
+        signal_id: ntl_core::SignalId,
+        /// Whether the weight was clamped.
+        weight: bool,
+        /// Whether the TTL was clamped.
+        ttl: bool,
     },
     /// A signal was dropped because no public key could be resolved for its
     /// claimed origin, so its signature could not be checked at all.
@@ -761,7 +780,7 @@ async fn read_loop(
     peer: &PeerIdentity,
 ) -> Result<(), RuntimeError> {
     loop {
-        let signal = {
+        let mut signal = {
             let mut guard = reader.lock().await;
             match frame::read_signal(&mut *guard).await {
                 Ok(s) => s,
@@ -828,14 +847,27 @@ async fn read_loop(
 
         let ok = ntl_core::crypto::verify_signal(&ClassicalModule, &signal, &key).unwrap_or(false);
         if !ok {
+            let mut pruned = false;
             if let Ok(Some(record)) = node.store().synapse_for_peer(&peer.node_id) {
-                let _ = node.penalize_signature_failure(&record.id);
+                if let Ok(Some(outcome)) = node.penalize_signature_failure(&record.id) {
+                    pruned = outcome.pruned;
+                }
             }
             let _ = events
                 .send(Event::SignatureFailed {
                     peer: peer.node_id.clone(),
+                    pruned,
                 })
                 .await;
+            if pruned {
+                // threat-model §4: the synapse is gone and re-formation is in
+                // cooldown, so there is nothing left to carry traffic over
+                // this connection. Closing is the honest consequence.
+                return Err(RuntimeError::Handshake(format!(
+                    "{} exceeded the signature-failure threshold; synapse pruned",
+                    peer.node_id
+                )));
+            }
             continue;
         }
 
@@ -849,14 +881,35 @@ async fn read_loop(
         // What is left is the check `receive` genuinely cannot make: a weight
         // outside [0, 1] is a protocol violation rather than a routing
         // decision, and `check_propagable` only tests the lower bound.
-        if !(0.0..=1.0).contains(&signal.weight) {
+        if !signal.weight.is_finite() {
+            // No sane value to clamp NaN toward, and it is malformed rather
+            // than inflated.
             let _ = events
                 .send(Event::Malformed {
                     peer: peer.node_id.clone(),
-                    reason: format!("weight {} out of range [0.0, 1.0]", signal.weight),
+                    reason: format!("weight {} is not a finite number", signal.weight),
                 })
                 .await;
             continue;
+        }
+
+        // threat-model §6: `weight` and `ttl` are outside the origin signature
+        // because propagation mutates them, so an on-path node can inflate
+        // either. This node enforces its own bounds regardless of what
+        // arrived — clamping rather than dropping, since the inflation is the
+        // relay's doing and dropping would let any on-path node destroy
+        // traffic by overwriting a field it is free to overwrite.
+        let clamp =
+            ntl_core::propagation::clamp_inbound_headers(&mut signal, &node.config().propagation);
+        if clamp.any() {
+            let _ = events
+                .send(Event::HeadersClamped {
+                    peer: peer.node_id.clone(),
+                    signal_id: signal.id,
+                    weight: clamp.weight_clamped,
+                    ttl: clamp.ttl_clamped,
+                })
+                .await;
         }
 
         // A receipt resolves one of our decisions rather than being routed on.

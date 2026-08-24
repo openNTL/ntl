@@ -5,7 +5,7 @@ description: "Specification for signal routing through the NTL network"
 "og:description": "Formal specification for how signals route through the NTL network based on synapse weight, activation, and topology."
 "twitter:title": "NTL Propagation Rules Spec"
 ---
-**Version:** 0.2.0-beta.1
+**Version:** beta_0.0.0
 
 ## Overview
 
@@ -58,9 +58,39 @@ A node MUST verify the signal's cryptographic signature before processing or
 propagating. Invalid signatures MUST result in the signal being dropped and
 the arriving synapse's weight being reduced.
 
-Verification MUST occur **after** the cheap checks — size bound, TTL, and
-deduplication — so that an attacker cannot force expensive signature
-verification with malformed traffic.
+### Ordering: Size First, Everything Else After
+
+The **size bound MUST be enforced before verification**, and before any buffer
+is allocated for the frame. That is the ordering constraint that matters: it is
+the only cheap check standing between an attacker-supplied length and this
+node's memory.
+
+**Deduplication and TTL MUST be checked *after* verification.** 0.2.0-draft
+required the opposite — verification after size, TTL *and* dedup, to keep an
+attacker from forcing signature work with malformed traffic. Implementing it
+showed the ordering costs more than it saves, in two specific ways:
+
+- **Deduplication is a write, not a read.** Claiming a signal identifier is
+  what makes it a duplicate. Checking it before verification therefore lets
+  *unauthenticated* traffic occupy the dedup cache and suppress the genuine
+  signal that follows — a cheaper and more damaging attack than the CPU cost
+  the ordering was defending against, and one that costs the attacker nothing
+  because the resulting timeouts apply negative weight updates the influence
+  cap deliberately does not bound ([threat-model](/spec/threat-model) §8).
+- **A TTL refusal owes an acknowledged sender a receipt**
+  ([delivery-semantics](/spec/delivery-semantics) §2.2). Emitting one for a
+  signal that has not been verified lets an attacker choose when this node
+  emits traffic, and to whom.
+
+The CPU argument is also weaker than it looks: an Ed25519 verification is tens
+of microseconds against a frame already read off the socket and size-bounded
+before allocation.
+
+An implementation MUST NOT "restore" the earlier ordering on the strength of
+the DoS argument alone. Where signature verification is genuinely too
+expensive to run per frame, the answer is a cheap pre-filter with no
+side effects — a per-peer rate limit, or a transport-level MAC — not moving a
+state-mutating check in front of authentication.
 
 The penalty and its recovery curve are specified in
 [threat-model](/spec/threat-model) §4: the synapse's weight is multiplied by
@@ -68,7 +98,11 @@ The penalty and its recovery curve are specified in
 `−1.0`, and recovery is by ordinary learning only. Repeated failures
 compound, and a synapse accumulating
 `signature_failure_prune_threshold` (default 5) failures within one
-influence window MUST be pruned.
+influence window MUST be pruned. The count is over a window, so it and the
+window's start MUST be persisted with the synapse: a restart must not be a
+free amnesty for an attacker part-way to the threshold. Re-formation of a
+pruned synapse MUST be refused until `signature_failure_cooldown_secs`
+(default 3600) has elapsed, or the prune costs an attacker one handshake.
 
 **An unresolvable origin key is a drop, not a pass.** Verification needs the
 origin's public key, and a node ID is that key's hash, so the key cannot be

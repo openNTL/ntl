@@ -58,6 +58,8 @@ fn synapse_record(id: &str, peer: u8, weight: f32) -> SynapseRecord {
         signals_received: 3,
         avg_latency_ns: 1_500_000,
         error_rate: 0.0,
+        signature_failures: 0,
+        failure_window_start_ns: 0,
     }
 }
 

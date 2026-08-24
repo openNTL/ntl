@@ -6,7 +6,7 @@ mode: "wide"
 "og:description": "The formal specification for the Neural Transfer Layer protocol, covering signals, synapses, propagation, activation, and cryptographic interfaces."
 "twitter:title": "NTL Specification"
 ---
-**Version:** 0.2.0-beta.1
+**Version:** beta_0.0.0
 **Status:** Beta
 **Authors:** The Bundu Foundation
 **License:** Apache 2.0
@@ -14,6 +14,35 @@ mode: "wide"
 ## Abstract
 
 The Neural Transfer Layer (NTL) is a neural signal-based data transfer layer for modern compute systems. It replaces the request-response paradigm of traditional APIs with signal propagation through a self-organizing, weighted graph topology. NTL is designed for AI-native systems, Web3 compatibility, post-quantum cryptographic agility, and resource-constrained environments.
+
+## Versioning
+
+The specification carries its own version, independent of any
+implementation's: **`beta_MAJOR.MINOR.PATCH`**, starting at `beta_0.0.0`.
+
+Two separate things were previously conflated under one number. A
+specification and an implementation of it move at different speeds and for
+different reasons — a wording clarification is not a release, and a bug fix in
+the reference implementation is not a specification change. Sharing a version
+made every implementation release look like a protocol revision.
+
+So:
+
+| What | Versioned as | Increments when |
+|---|---|---|
+| This specification | `beta_0.0.0` | A normative requirement is added, changed or removed |
+| The reference implementation | semver (`0.2.0-beta.1`) | Ordinary release cadence, independent of this document |
+
+The crates and npm packages must carry semver, because Cargo and npm require
+it — `beta_0.0.0` is not a valid semver string and would fail to build. That
+is not a workaround; it is the separation above working as intended.
+
+Within `beta_`, the three numbers mean what they usually do. A patch bump is
+editorial: clarified wording, a corrected example, a stated consequence that
+was already implied. A minor bump adds a requirement without invalidating a
+conforming implementation. A major bump breaks one — a changed MUST, a wire
+format revision, a removed guarantee. The `beta_` prefix drops when a second
+independent implementation interoperates; see below for why that is the gate.
 
 ## Status of This Document
 
@@ -77,7 +106,7 @@ The NTL specification is divided into the following documents:
   </Card>
 </CardGroup>
 
-## Changes in 0.2.0-beta.1
+## Changes in beta_0.0.0
 
 This revision closes the gaps that made the routing claims uncheckable and
 the protocol unusable for transactional traffic, and it is the first revision
@@ -101,13 +130,6 @@ whose requirements are all exercised by a running implementation.
 5. **Resource-efficient** — Designed for constrained devices and networks
 6. **Interoperable** — Adapters enable Web2, Web3, and legacy system connectivity
 7. **Open** — Fully open source, community-governed specification
-
-## Versioning
-
-The NTL specification follows semantic versioning:
-- **Major** — Breaking changes to signal format or core protocol semantics
-- **Minor** — Backward-compatible additions (new signal types, optional fields)
-- **Patch** — Clarifications and editorial corrections
 
 ## Reference Implementation
 

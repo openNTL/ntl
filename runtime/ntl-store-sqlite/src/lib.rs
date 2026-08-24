@@ -372,6 +372,8 @@ fn row_to_synapse(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoreResult<Synap
     let received: i64 = row.get(9)?;
     let latency: i64 = row.get(10)?;
     let error_rate: f64 = row.get(11)?;
+    let signature_failures: i64 = row.get(12)?;
+    let failure_window_start: i64 = row.get(13)?;
 
     Ok((|| {
         Ok(SynapseRecord {
@@ -390,6 +392,9 @@ fn row_to_synapse(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoreResult<Synap
             avg_latency_ns: from_i64(latency),
             #[allow(clippy::cast_possible_truncation)]
             error_rate: error_rate as f32,
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            signature_failures: signature_failures.max(0) as u32,
+            failure_window_start_ns: from_i64(failure_window_start),
         })
     })())
 }
@@ -428,7 +433,7 @@ fn row_to_journal(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoreResult<Journ
 
 const SYNAPSE_COLUMNS: &str = "id, peer, weight, attenuation_factor, state, type_affinity, \
      established_at_ns, last_active_ns, signals_transmitted, signals_received, \
-     avg_latency_ns, error_rate";
+     avg_latency_ns, error_rate, signature_failures, failure_window_start_ns";
 
 const JOURNAL_COLUMNS: &str = "id, signal, signal_type, synapse, peer, score, signal_weight, \
      explored, decided_at_ns, outcome, resolved_at_ns";
@@ -522,8 +527,9 @@ impl NodeStore for SqliteStore {
         conn.execute(
             "INSERT INTO synapses (id, peer, weight, attenuation_factor, state, \
                  type_affinity, established_at_ns, last_active_ns, \
-                 signals_transmitted, signals_received, avg_latency_ns, error_rate) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+                 signals_transmitted, signals_received, avg_latency_ns, error_rate, \
+                 signature_failures, failure_window_start_ns) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14) \
              ON CONFLICT(id) DO UPDATE SET \
                  peer=excluded.peer, weight=excluded.weight, \
                  attenuation_factor=excluded.attenuation_factor, \
@@ -533,7 +539,9 @@ impl NodeStore for SqliteStore {
                  signals_transmitted=excluded.signals_transmitted, \
                  signals_received=excluded.signals_received, \
                  avg_latency_ns=excluded.avg_latency_ns, \
-                 error_rate=excluded.error_rate",
+                 error_rate=excluded.error_rate, \
+                 signature_failures=excluded.signature_failures, \
+                 failure_window_start_ns=excluded.failure_window_start_ns",
             params![
                 record.id.0,
                 record.peer.0,
@@ -547,6 +555,8 @@ impl NodeStore for SqliteStore {
                 to_i64(record.signals_received),
                 to_i64(record.avg_latency_ns),
                 f64::from(record.error_rate),
+                i64::from(record.signature_failures),
+                to_i64(record.failure_window_start_ns),
             ],
         )
         .map_err(write_err)?;

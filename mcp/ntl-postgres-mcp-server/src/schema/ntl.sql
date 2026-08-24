@@ -54,7 +54,14 @@ CREATE TABLE IF NOT EXISTS synapses (
     signals_transmitted BIGINT NOT NULL DEFAULT 0,
     signals_received    BIGINT NOT NULL DEFAULT 0,
     avg_latency_ns      BIGINT NOT NULL DEFAULT 0,
-    error_rate          REAL NOT NULL DEFAULT 0 CHECK (error_rate >= 0 AND error_rate <= 1)
+    error_rate          REAL NOT NULL DEFAULT 0 CHECK (error_rate >= 0 AND error_rate <= 1),
+    -- threat-model §4: a synapse accumulating
+    -- `signature_failure_prune_threshold` failures within one influence
+    -- window must be pruned. A count over a window needs both the count and
+    -- the window's start persisted, or a restart is a free amnesty for an
+    -- attacker part-way to the threshold.
+    signature_failures      INTEGER NOT NULL DEFAULT 0 CHECK (signature_failures >= 0),
+    failure_window_start_ns BIGINT NOT NULL DEFAULT 0
 );
 
 -- Routing lists synapses by weight descending on every decision.

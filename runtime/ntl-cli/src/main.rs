@@ -765,10 +765,33 @@ fn print_event(event: &Event) {
         ),
         Event::PeerConnected { peer } => println!("{} peer connected {peer}", "+".green()),
         Event::PeerDisconnected { peer } => println!("{} peer disconnected {peer}", "-".dimmed()),
-        Event::SignatureFailed { peer } => println!(
-            "{} signature verification failed from {peer} — synapse penalized",
-            "!".red().bold()
-        ),
+        Event::SignatureFailed { peer, pruned } => {
+            if *pruned {
+                println!(
+                    "{} signature-failure threshold exceeded by {peer} — synapse pruned, \
+                     re-formation in cooldown",
+                    "!!".red().bold()
+                );
+            } else {
+                println!(
+                    "{} signature verification failed from {peer} — synapse penalized",
+                    "!".red().bold()
+                );
+            }
+        }
+        Event::HeadersClamped {
+            peer, weight, ttl, ..
+        } => {
+            let which = match (weight, ttl) {
+                (true, true) => "weight and ttl",
+                (true, false) => "weight",
+                _ => "ttl",
+            };
+            println!(
+                "{} clamped inflated {which} on a signal from {peer}",
+                "~".yellow()
+            );
+        }
         Event::OriginKeyUnknown { peer, origin } => println!(
             "{} dropped a signal relayed by {peer}: no public key known for its \
              claimed origin {origin}, so its signature could not be checked",

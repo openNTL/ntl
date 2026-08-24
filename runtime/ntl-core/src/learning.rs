@@ -38,6 +38,13 @@ pub enum DeploymentClass {
     HighTraffic,
 }
 
+/// Serde default for [`LearningConfig::signature_failure_cooldown_secs`].
+///
+/// One hour, matching threat-model §4's stated default.
+fn default_signature_failure_cooldown_secs() -> u64 {
+    3_600
+}
+
 /// Hyperparameters for the routing model.
 ///
 /// Defaults come from [spec/learning-model][spec] §5.
@@ -74,6 +81,15 @@ pub struct LearningConfig {
     pub signature_failure_penalty: f32,
     /// Signature failures within one influence window before pruning.
     pub signature_failure_prune_threshold: u32,
+    /// Seconds a synapse pruned for signature failures may not be re-formed.
+    ///
+    /// [threat-model](https://openntl.org/spec/threat-model) §4: a node SHOULD
+    /// refuse to re-form such a synapse for a cooldown period. Without one the
+    /// prune costs an attacker a single handshake — it reconnects and the
+    /// fresh synapse starts at `initial_weight` with no memory of why the last
+    /// one died.
+    #[serde(default = "default_signature_failure_cooldown_secs")]
+    pub signature_failure_cooldown_secs: u64,
 }
 
 impl LearningConfig {
@@ -99,6 +115,7 @@ impl LearningConfig {
             influence_window_secs: 3_600,
             signature_failure_penalty: 0.5,
             signature_failure_prune_threshold: 5,
+            signature_failure_cooldown_secs: default_signature_failure_cooldown_secs(),
         }
     }
 

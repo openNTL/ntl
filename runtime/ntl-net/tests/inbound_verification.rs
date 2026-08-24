@@ -322,30 +322,155 @@ async fn an_expired_ttl_is_refused_and_reported_not_silently_dropped() {
 }
 
 #[tokio::test]
-async fn a_weight_outside_the_valid_range_is_malformed() {
+async fn inflated_headers_are_clamped_not_dropped() {
     let (runtime, addr, mut events) = start_node().await;
     let mut peer = RawPeer::connect(addr, 8).await;
     assert_eq!(runtime.wait_for_peers(1, Duration::from_secs(5)).await, 1);
 
-    // Weight is in the signed body, so this is a peer signing something it
-    // should never have sent rather than an on-path edit. `check_propagable`
-    // only tests the lower bound, so this is the one structural check the
-    // routing layer cannot make.
-    let mut bad = Signal::data("overweight")
+    // `weight` and `ttl` are excluded from the origin signature — every hop
+    // mutates them — so an on-path node can inflate either. threat-model §6
+    // requires the receiver to enforce its own bounds regardless of what
+    // arrived. Clamping rather than dropping, because the inflation is the
+    // relay's doing: dropping would let any on-path node destroy traffic by
+    // overwriting a field it is free to overwrite.
+    let mut inflated = Signal::data("inflated")
         .with_weight(0.5)
         .build_unsigned(peer.node_id.clone());
-    bad.weight = 4.0;
+    ntl_core::crypto::sign_signal(&ClassicalModule, &mut inflated, &peer.private).expect("sign");
+    // Edited after signing, exactly as a relay would.
+    inflated.weight = 9.0;
+    inflated.ttl = 60_000;
+    peer.send(&inflated).await;
+
+    // Long enough for the activation latency guard to release it: a clamped
+    // 1.0 weight over a fresh 0.1 synapse contributes 0.1 against a 0.5
+    // threshold, so it will not fire on arrival.
+    let seen = drain(&mut events, Duration::from_millis(2_000)).await;
+
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::HeadersClamped { weight, ttl, .. } if *weight && *ttl
+        )),
+        "both inflated headers must be reported as clamped, saw {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::Malformed { .. })),
+        "an inflated header is clamped, not malformed, saw {seen:?}"
+    );
+
+    // And the signal survived, carrying this node's bounds rather than the
+    // relay's numbers.
+    let body = seen.iter().find_map(|e| match e {
+        Event::Handled { signal } => Some(signal.clone()),
+        Event::Released {
+            signal: Some(s), ..
+        } => Some(s.clone()),
+        _ => None,
+    });
+    let body = body.expect("the signal must still be delivered");
+    assert!(
+        body.weight <= 1.0,
+        "weight must be clamped into range, got {}",
+        body.weight
+    );
+    assert!(
+        body.ttl <= 32,
+        "ttl must be clamped to max_accepted_ttl, got {}",
+        body.ttl
+    );
+}
+
+#[tokio::test]
+async fn a_non_finite_weight_is_malformed() {
+    // NaN has no sane value to clamp toward, and is malformed rather than
+    // inflated — so this is the one header case that still drops.
+    let (runtime, addr, mut events) = start_node().await;
+    let mut peer = RawPeer::connect(addr, 9).await;
+    assert_eq!(runtime.wait_for_peers(1, Duration::from_secs(5)).await, 1);
+
+    let mut bad = Signal::data("nan")
+        .with_weight(0.5)
+        .build_unsigned(peer.node_id.clone());
     ntl_core::crypto::sign_signal(&ClassicalModule, &mut bad, &peer.private).expect("sign");
+    bad.weight = f32::NAN;
     peer.send(&bad).await;
 
     let seen = drain(&mut events, Duration::from_millis(500)).await;
     assert!(
         seen.iter().any(|e| matches!(e, Event::Malformed { .. })),
-        "expected a malformed-signal drop, saw {seen:?}"
+        "expected a malformed drop, saw {seen:?}"
     );
     assert!(
         !seen.iter().any(|e| matches!(e, Event::Handled { .. })),
-        "a malformed signal must not be handled, saw {seen:?}"
+        "a non-finite weight must not be handled, saw {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn five_signature_failures_prune_the_synapse() {
+    // threat-model §4: a synapse accumulating
+    // `signature_failure_prune_threshold` failures within one influence window
+    // MUST be pruned, and re-formation SHOULD be refused for a cooldown. The
+    // threshold and cooldown were both configured and read by nothing.
+    let (runtime, addr, mut events) = start_node().await;
+    let mut peer = RawPeer::connect(addr, 11).await;
+    assert_eq!(runtime.wait_for_peers(1, Duration::from_secs(5)).await, 1);
+
+    let threshold = runtime
+        .node()
+        .config()
+        .learning
+        .signature_failure_prune_threshold;
+    assert_eq!(threshold, 5, "the shipped default this test is written for");
+
+    for i in 0..threshold {
+        let mut forged = Signal::data("forged")
+            .with_weight(0.4)
+            .with_payload(serde_json::json!({ "n": i }))
+            .build_unsigned(peer.node_id.clone());
+        ntl_core::crypto::sign_signal(&ClassicalModule, &mut forged, &peer.private).expect("sign");
+        // Corrupt after signing, so the signature belongs to a different body.
+        forged.payload = serde_json::json!({ "tampered": i });
+        // A dead socket after the prune is expected, so ignore write errors.
+        let _ = ntl_net::frame::write_signal(&mut peer.stream, &forged).await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+
+    let seen = drain(&mut events, Duration::from_millis(900)).await;
+    let failures = seen
+        .iter()
+        .filter(|e| matches!(e, Event::SignatureFailed { .. }))
+        .count();
+    assert!(
+        failures >= usize::try_from(threshold).expect("small"),
+        "expected {threshold} signature failures, saw {failures}"
+    );
+    assert!(
+        seen.iter()
+            .any(|e| matches!(e, Event::SignatureFailed { pruned: true, .. })),
+        "the last failure must report the prune, saw {seen:?}"
+    );
+
+    // The synapse is gone from the routable set.
+    let eligible = runtime
+        .node()
+        .store()
+        .list_synapses(&ntl_core::store::SynapseFilter::eligible())
+        .expect("store");
+    assert!(
+        !eligible.iter().any(|s| s.peer == peer.node_id),
+        "a pruned synapse must not be routable"
+    );
+
+    // And re-formation is refused while the cooldown holds.
+    let err = runtime
+        .node()
+        .upsert_synapse(&peer.node_id)
+        .expect_err("re-formation must be refused during the cooldown");
+    assert!(
+        err.to_string().contains("cooldown"),
+        "the error must say why, got {err}"
     );
 }
 

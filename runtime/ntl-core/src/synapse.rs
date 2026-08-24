@@ -21,6 +21,15 @@ impl std::fmt::Display for SynapseId {
     }
 }
 
+/// What a signature failure did to a synapse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignatureFailureOutcome {
+    /// Failures counted in the current influence window, including this one.
+    pub failures_in_window: u32,
+    /// Whether this failure crossed the threshold and pruned the synapse.
+    pub pruned: bool,
+}
+
 /// The lifecycle state of a synapse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SynapseState {
@@ -138,6 +147,12 @@ pub struct Synapse {
     /// Weight attenuation factor for signals passing through.
     pub attenuation_factor: f32,
 
+    /// Signature failures counted in the current influence window.
+    pub signature_failures: u32,
+
+    /// When the current signature-failure window began (ns since epoch).
+    pub failure_window_start_ns: u64,
+
     /// Historical affinity for signal types (type -> success count).
     pub type_affinity: std::collections::HashMap<String, u64>,
 }
@@ -225,6 +240,8 @@ impl Synapse {
             active_threshold: config.active_threshold,
             dormancy_threshold: config.dormancy_threshold,
             attenuation_factor: config.attenuation_factor,
+            signature_failures: 0,
+            failure_window_start_ns: 0,
             type_affinity: std::collections::HashMap::new(),
         }
     }
@@ -338,6 +355,8 @@ impl Synapse {
             signals_received: self.signals_received,
             avg_latency_ns: self.avg_latency_ns,
             error_rate: self.error_rate,
+            signature_failures: self.signature_failures,
+            failure_window_start_ns: self.failure_window_start_ns,
         }
     }
 
@@ -370,6 +389,8 @@ impl Synapse {
             active_threshold: config.active_threshold,
             dormancy_threshold: config.dormancy_threshold,
             attenuation_factor: record.attenuation_factor,
+            signature_failures: record.signature_failures,
+            failure_window_start_ns: record.failure_window_start_ns,
             type_affinity: record.type_affinity.clone(),
         }
     }
@@ -410,9 +431,43 @@ impl Synapse {
     }
 
     /// Apply the signature-failure penalty.
-    pub fn apply_signature_failure(&mut self, learning: &crate::learning::LearningConfig) {
+    pub fn apply_signature_failure(
+        &mut self,
+        now_ns: u64,
+        learning: &crate::learning::LearningConfig,
+    ) -> SignatureFailureOutcome {
         self.weight = crate::learning::apply_signature_penalty(self.weight, learning);
+
+        // Count within one influence window, per threat-model §4. A window
+        // that has elapsed starts a fresh count rather than accumulating
+        // forever: the threshold is "five failures in an hour", not "five
+        // failures ever", or a long-lived synapse would eventually be pruned
+        // for unrelated incidents spread across months.
+        let window_start = learning.influence_window_start(now_ns);
+        if self.failure_window_start_ns < window_start {
+            self.failure_window_start_ns = now_ns;
+            self.signature_failures = 1;
+        } else {
+            self.signature_failures = self.signature_failures.saturating_add(1);
+        }
+
+        if self.signature_failures >= learning.signature_failure_prune_threshold {
+            // Prune, and stamp `last_active_ns` so the re-formation cooldown
+            // has a clock. Pruned is terminal for `update_state`, so the
+            // weight can no longer move it.
+            self.state = SynapseState::Pruned;
+            self.last_active_ns = now_ns;
+            return SignatureFailureOutcome {
+                failures_in_window: self.signature_failures,
+                pruned: true,
+            };
+        }
+
         self.update_state();
+        SignatureFailureOutcome {
+            failures_in_window: self.signature_failures,
+            pruned: false,
+        }
     }
 
     /// Weight after time-based decay, without mutating.

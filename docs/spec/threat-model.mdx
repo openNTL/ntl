@@ -5,7 +5,7 @@ description: "What NTL defends against, and what it does not"
 "og:description": "Adversarial analysis of NTL: weight poisoning, Sybil attacks, eclipse attacks, and an explicit statement of what v0.1 does not defend against."
 "twitter:title": "NTL Threat Model Spec"
 ---
-**Version:** 0.2.0-beta.1
+**Version:** beta_0.0.0
 
 ## Overview
 
@@ -16,7 +16,7 @@ an attacker who cannot read your data may still be able to **teach your
 node** to send it somewhere useful to them.
 
 This document states what NTL defends against at this version, how, and —
-in [§10](#10-out-of-scope-at-v0-1) — what it does not. The out-of-scope
+in [§10](#10-out-of-scope) — what it does not. The out-of-scope
 section is normative: an operator who deploys NTL against a threat listed
 there is unprotected, and needs to know that before deploying rather than
 after.
@@ -100,7 +100,7 @@ having *handled* it, earning positive reward for a path that discards
 traffic. This is a black-hole attack and it is only partly mitigated: the
 node has no way to verify handling actually occurred. Mitigation is
 statistical — such a peer accrues no downstream evidence and its affinity
-decays — and incomplete. See [§10](#10-out-of-scope-at-v0-1).
+decays — and incomplete. See [§10](#10-out-of-scope).
 
 ## 3. Eclipse Attacks on Topology
 
@@ -176,10 +176,18 @@ table.
 | Dedup cache growth | TTL-bounded with mandatory purge |
 | Journal growth | `trim_journal` on a retention bound |
 | Oversized signals | `MAX_SIZE` = 1 MiB, enforced before parsing |
-| Signature-check CPU | Verification occurs after cheap size and TTL checks |
+| Signature-check CPU | Frames are size-bounded before allocation; see the ordering note below |
 
-A node MUST apply size and TTL checks **before** signature verification.
-Verifying first makes CPU exhaustion trivially cheap for the attacker.
+A node MUST apply the **size** bound before signature verification, and
+before allocating a buffer for the frame.
+
+TTL and deduplication go *after* verification, which is a deliberate reversal
+of 0.2.0-draft — see [propagation-rules](/spec/propagation-rules) Rule 5 for
+the reasoning. In short: deduplication is a write, so checking it first lets
+unauthenticated traffic claim identifiers and suppress genuine signals, and a
+TTL refusal owes an acknowledged sender a receipt that must not be emitted on
+an unverified signal. The residual CPU cost is one Ed25519 verification per
+size-bounded frame from an already-authenticated peer.
 
 **Residual risk.** Activation backpressure protects the node, not the
 network. A flood still consumes upstream bandwidth, and a node that throttles
@@ -209,8 +217,15 @@ or forge trace entries. Three things bound the abuse rather than preventing
 it:
 
 1. A receiving node MUST enforce its own limits — `weight` in `[0, 1]`,
-   `ttl` at or below its configured maximum — and clamp or reject
-   regardless of what arrived.
+   `ttl` at or below `max_accepted_ttl` — and clamp or reject regardless of
+   what arrived. **Clamping is preferred to rejecting.** The inflation is the
+   relay's doing, not the origin's, so dropping the signal would let any
+   on-path node destroy traffic simply by overwriting a field it is free to
+   overwrite. A node SHOULD report a clamp: `weight` and `ttl` sit outside the
+   signature, so a clamp is evidence of a peer trying to win traffic or extend
+   a signal's life beyond what its origin asked for. The exception is a
+   non-finite `weight`, which has no sane target to clamp toward and is
+   malformed rather than inflated — that MUST be dropped.
 2. Hop-to-hop authenticity comes from the synapse, not the origin signature.
    A node knows which peer handed it a signal even when it cannot verify
    what that peer changed.
@@ -348,10 +363,10 @@ separately from failed-signature. They are different events: the second
 identifies a misbehaving peer, the first only says the topology is carrying
 traffic this node cannot authenticate.
 
-## 10. Out of Scope at v0.1
+## 10. Out of Scope
 
-NTL does **not** defend against the following. Each is a real risk, listed
-so that operators are not surprised.
+NTL does **not** defend against the following, as of `beta_0.0.0`. Each is a
+real risk, listed so that operators are not surprised.
 
 | Not defended | Consequence | Roadmap |
 |---|---|---|
@@ -384,5 +399,5 @@ apply, because the adversary can no longer create identities freely.
 
 Report vulnerabilities per [SECURITY.md](https://github.com/openNTL/ntl/blob/main/SECURITY.md)
 — privately, to security@openntl.org. Attacks listed in
-[§10](#10-out-of-scope-at-v0-1) are welcome as roadmap input but are not
+[§10](#10-out-of-scope) are welcome as roadmap input but are not
 treated as vulnerabilities.

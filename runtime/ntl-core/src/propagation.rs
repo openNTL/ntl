@@ -48,6 +48,15 @@ impl Default for PropagationScope {
     }
 }
 
+/// Serde default for [`PropagationConfig::max_accepted_ttl`].
+///
+/// Generous relative to `default_ttl` (10), because a legitimate signal may
+/// have been emitted by a node configured for a deeper network — but bounded,
+/// which is the whole point.
+fn default_max_accepted_ttl() -> u16 {
+    32
+}
+
 /// Configuration for the propagation engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -56,6 +65,16 @@ pub struct PropagationConfig {
     pub default_strategy: PropagationScope,
     /// Default TTL for signals.
     pub default_ttl: u16,
+    /// Largest TTL this node will honour on an arriving signal.
+    ///
+    /// `ttl` is excluded from the origin signature — it has to be, since every
+    /// hop decrements it — so an on-path node can inflate it freely.
+    /// [threat-model](https://openntl.org/spec/threat-model) §6 requires a
+    /// receiving node to enforce its own bound regardless of what arrived.
+    /// Without one, a relay can make a signal live arbitrarily longer than its
+    /// origin intended, and depth is what multiplies fan-out.
+    #[serde(default = "default_max_accepted_ttl")]
+    pub max_accepted_ttl: u16,
     /// Minimum signal weight to propagate.
     pub min_propagation_weight: f32,
     /// Default attenuation factor.
@@ -79,6 +98,7 @@ impl Default for PropagationConfig {
         Self {
             default_strategy: PropagationScope::default(),
             default_ttl: 10,
+            max_accepted_ttl: default_max_accepted_ttl(),
             min_propagation_weight: 0.01,
             attenuation_factor: 0.9,
             max_fanout: 5,
@@ -352,6 +372,62 @@ pub fn check_propagable(
         return Err(RejectReason::BelowThreshold);
     }
     Ok(())
+}
+
+/// What [`clamp_inbound_headers`] had to correct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeaderClamp {
+    /// The signal's weight was outside `[0, 1]` and was clamped.
+    pub weight_clamped: bool,
+    /// The signal's TTL exceeded `max_accepted_ttl` and was clamped.
+    pub ttl_clamped: bool,
+}
+
+impl HeaderClamp {
+    /// Whether anything was corrected.
+    #[must_use]
+    pub fn any(self) -> bool {
+        self.weight_clamped || self.ttl_clamped
+    }
+}
+
+/// Enforce this node's own bounds on the mutable header fields.
+///
+/// Four fields are excluded from the origin signature because propagation
+/// mutates them by design — `signature`, `trace`, `ttl` and `weight`. An
+/// on-path node can therefore inflate a signal's weight to win traffic, or its
+/// TTL to make it live longer than the origin intended.
+/// [threat-model](https://openntl.org/spec/threat-model) §6 bounds that rather
+/// than preventing it, and the first of its three bounds is this one: **a
+/// receiving node MUST enforce its own limits and clamp or reject regardless
+/// of what arrived.**
+///
+/// Clamping rather than rejecting, deliberately. An inflated header is the
+/// relay's doing, not the origin's, and dropping the signal would let any
+/// on-path node destroy traffic simply by overwriting a field it is free to
+/// overwrite. Clamping removes the amplification and delivers the signal.
+///
+/// A non-finite weight is the exception: there is no sane value to clamp NaN
+/// toward, and it is malformed rather than inflated. The caller is told, and
+/// should drop.
+///
+/// Returns what was corrected, so an operator can see a peer doing it.
+pub fn clamp_inbound_headers(
+    signal: &mut crate::signal::Signal,
+    config: &PropagationConfig,
+) -> HeaderClamp {
+    let mut report = HeaderClamp::default();
+
+    if signal.weight < 0.0 || signal.weight > 1.0 {
+        signal.weight = signal.weight.clamp(0.0, 1.0);
+        report.weight_clamped = true;
+    }
+    if signal.ttl > config.max_accepted_ttl {
+        signal.ttl = config.max_accepted_ttl;
+        report.ttl_clamped = true;
+    }
+
+    report
 }
 
 /// Whether a flood has reached the depth its emitter asked for.

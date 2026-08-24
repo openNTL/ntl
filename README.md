@@ -3,7 +3,7 @@
 **The Neural Transfer Layer for Modern Compute**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Spec Version](https://img.shields.io/badge/spec-v0.2.0--beta-blue.svg)](https://openntl.org/spec/overview)
+[![Spec Version](https://img.shields.io/badge/spec-beta__0.0.0-blue.svg)](https://openntl.org/spec/overview)
 [![npm](https://img.shields.io/badge/npm-%40bundu%2Fntl--cli-red.svg)](https://www.npmjs.com/package/@bundu/ntl-cli)
 
 ---
@@ -128,9 +128,11 @@ is published at [openntl.org/spec/overview](https://openntl.org/spec/overview).
 
 ## Project Status
 
-NTL is in **beta** (`0.2.0-beta.1`). Phase 0 is complete: the specification is
-at 0.2.0-beta.1, covering the learning model, threat model, delivery semantics,
-and storage interface.
+NTL is in **beta**. The specification and the implementation are versioned
+independently — spec `beta_0.0.0`, crates and packages `0.2.0-beta.1` — because
+a wording clarification is not a release and a bug fix is not a protocol
+revision. Phase 0 is complete: the specification covers the learning model,
+threat model, delivery semantics, and storage interface.
 
 What runs today: two nodes form a synapse over loopback, exchange signed
 signals, return receipts, and the routing weights change in response. See the

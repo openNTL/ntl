@@ -33,6 +33,12 @@ fallback = "tcp"
 
 [propagation]
 default_ttl = 10
+# Largest TTL this node honours on an arriving signal. `ttl` sits outside the
+# origin signature — every hop decrements it — so an on-path node can inflate
+# it freely; this is the bound that makes that harmless. Clamped, not
+# rejected: dropping would let any relay destroy traffic by overwriting a
+# field it is free to overwrite. See threat-model §6.
+max_accepted_ttl = 32
 min_propagation_weight = 0.01
 attenuation_factor = 0.9
 max_fanout = 5               # max synapses per propagation
@@ -87,6 +93,14 @@ receipt_window_secs = 30        # unresolved decisions time out after this
 max_total_outbound_weight = 8.0 # W_max; bounds weight inflation
 influence_cap_per_peer = 0.20   # C; bounds weight poisoning per identity
 influence_window_secs = 3600
+
+# Signature failures. A single failure halves the synapse's weight; five
+# within one influence window prune it outright, and re-formation is refused
+# for the cooldown below — otherwise the prune costs an attacker one
+# handshake. See threat-model §4.
+signature_failure_penalty = 0.5
+signature_failure_prune_threshold = 5
+signature_failure_cooldown_secs = 3600
 
 # Optional: Web2 adapter
 # [adapter.web2]

@@ -150,6 +150,8 @@ fn state_survives_reopening_the_database() {
             signals_received: 4,
             avg_latency_ns: 1_234,
             error_rate: 0.02,
+            signature_failures: 0,
+            failure_window_start_ns: 0,
         })
         .expect("put");
         s.put_meta("node-id", b"stable-identity").expect("meta");
@@ -207,6 +209,8 @@ fn one_synapse_per_peer_is_enforced() {
         signals_received: 0,
         avg_latency_ns: 0,
         error_rate: 0.0,
+        signature_failures: 0,
+        failure_window_start_ns: 0,
     };
     s.put_synapse(&base).expect("first");
 
@@ -346,6 +350,8 @@ fn listing_orders_by_weight_and_breaks_ties_stably() {
             signals_received: 0,
             avg_latency_ns: 0,
             error_rate: 0.0,
+            signature_failures: 0,
+            failure_window_start_ns: 0,
         })
         .expect("put");
     }
@@ -386,6 +392,8 @@ fn eligible_filter_includes_weakening_synapses() {
             signals_received: 0,
             avg_latency_ns: 0,
             error_rate: 0.0,
+            signature_failures: 0,
+            failure_window_start_ns: 0,
         })
         .expect("put");
     }
@@ -488,6 +496,8 @@ fn far_future_timestamps_do_not_wrap() {
         signals_received: 0,
         avg_latency_ns: 0,
         error_rate: 0.0,
+        signature_failures: 0,
+        failure_window_start_ns: 0,
     })
     .expect("put");
 

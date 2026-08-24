@@ -131,6 +131,19 @@ pub struct SynapseRecord {
     pub avg_latency_ns: u64,
     /// Exponentially weighted transmission failure ratio in `[0, 1]`.
     pub error_rate: f32,
+    /// Signature failures counted in the current influence window.
+    ///
+    /// [threat-model](https://openntl.org/spec/threat-model) §4 requires a
+    /// synapse accumulating `signature_failure_prune_threshold` failures
+    /// within one influence window to be pruned. That is a count over a
+    /// window, so the count and the window's start have to be persisted —
+    /// a restart must not be a free amnesty.
+    #[serde(default)]
+    pub signature_failures: u32,
+    /// When the current signature-failure window began, in nanoseconds since
+    /// the Unix epoch. Zero when no failure has been recorded.
+    #[serde(default)]
+    pub failure_window_start_ns: u64,
 }
 
 /// Filter for [`NodeStore::list_synapses`].

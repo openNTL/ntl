@@ -667,20 +667,25 @@ impl Node {
     ///
     /// # Errors
     /// Returns an error if the store is unavailable.
-    pub fn penalize_signature_failure(&self, synapse_id: &SynapseId) -> crate::Result<()> {
+    pub fn penalize_signature_failure(
+        &self,
+        synapse_id: &SynapseId,
+    ) -> crate::Result<Option<crate::synapse::SignatureFailureOutcome>> {
+        let now = self.clock.now_ns();
         let Some(record) = self
             .store
             .get_synapse(synapse_id)
             .map_err(|e| crate::Error::Serialization(e.to_string()))?
         else {
-            return Ok(());
+            return Ok(None);
         };
         let mut synapse =
             Synapse::from_record(&record, self.identity.clone(), self.synapse_config());
-        synapse.apply_signature_failure(self.learning());
+        let outcome = synapse.apply_signature_failure(now, self.learning());
         self.store
             .put_synapse(&synapse.to_record())
-            .map_err(|e| crate::Error::Serialization(e.to_string()))
+            .map_err(|e| crate::Error::Serialization(e.to_string()))?;
+        Ok(Some(outcome))
     }
 
     /// Register or update a synapse to a peer.
@@ -703,6 +708,40 @@ impl Node {
             //
             // The handshake has just completed, which is exactly the evidence
             // synapse-lifecycle asks for — the peer is demonstrably alive.
+            // A synapse pruned for signature failures may not be re-formed
+            // until its cooldown elapses (threat-model §4). Without this the
+            // prune costs an attacker one handshake: reconnect, and the fresh
+            // synapse starts at `initial_weight` with no memory of why the
+            // last one died.
+            if existing.state == crate::synapse::SynapseState::Pruned {
+                let cooldown_ns = self
+                    .learning()
+                    .signature_failure_cooldown_secs
+                    .saturating_mul(1_000_000_000);
+                let until = existing.last_active_ns.saturating_add(cooldown_ns);
+                if now < until {
+                    return Err(crate::Error::InvalidSignal(format!(
+                        "synapse to {peer} was pruned and is in cooldown for \
+                         another {}s",
+                        (until - now) / 1_000_000_000
+                    )));
+                }
+                // Cooldown served. Re-form from scratch, with the failure
+                // counter cleared — the window it belonged to is long gone.
+                let mut synapse =
+                    Synapse::from_record(&existing, self.identity.clone(), self.synapse_config());
+                synapse.weight = self.synapse_config().initial_weight;
+                synapse.signature_failures = 0;
+                synapse.failure_window_start_ns = 0;
+                synapse.state = crate::synapse::SynapseState::Forming;
+                synapse.activate();
+                synapse.last_active_ns = now;
+                let record = synapse.to_record();
+                self.store
+                    .put_synapse(&record)
+                    .map_err(|e| crate::Error::Serialization(e.to_string()))?;
+                return Ok(record);
+            }
             if existing.state == crate::synapse::SynapseState::Dormant {
                 let mut synapse =
                     Synapse::from_record(&existing, self.identity.clone(), self.synapse_config());

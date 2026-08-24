@@ -77,10 +77,23 @@ pub async fn run_node(class: DeploymentClass, default_port: u16) -> Result<(), S
                 return Ok(());
             }
             event = events.recv() => match event {
-                Some(Event::SignatureFailed { peer }) => {
+                Some(Event::SignatureFailed { peer, pruned }) => {
                     // Either an attack or a serious defect; both warrant a
                     // louder level than the rest.
-                    tracing::warn!(%peer, "signature verification failed; synapse penalized");
+                    if pruned {
+                        tracing::error!(
+                            %peer,
+                            "signature-failure threshold exceeded; synapse pruned and \
+                             re-formation is in cooldown"
+                        );
+                    } else {
+                        tracing::warn!(%peer, "signature verification failed; synapse penalized");
+                    }
+                }
+                Some(Event::HeadersClamped { peer, weight, ttl, .. }) => {
+                    // `weight` and `ttl` sit outside the origin signature, so a
+                    // clamp means this peer inflated them.
+                    tracing::warn!(%peer, weight, ttl, "clamped inflated signal headers");
                 }
                 Some(Event::OriginKeyUnknown { peer, origin }) => {
                     // Not necessarily the relaying peer's fault, but an
