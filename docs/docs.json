@@ -142,6 +142,13 @@
       }
     ]
   },
+  "redirects": [
+    {
+      "source": "/guides/siafu-integration",
+      "destination": "/guides/storage-backends",
+      "permanent": true
+    }
+  ],
   "footer": {
     "socials": {
       "x": "https://x.com/nyuchiafrica",
