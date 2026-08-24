@@ -157,14 +157,13 @@
     }
   },
   "fonts": {
-    "family": "Source Sans Pro",
-    "weight": 500,
-    "format": "woff2",
     "heading": {
-      "family": "Source Sans Pro"
+      "family": "Source Sans Pro",
+      "weight": 500
     },
     "body": {
-      "family": "Plus Jakarta Sans"
+      "family": "Plus Jakarta Sans",
+      "weight": 500
     }
   },
   "description": "NTL is an open source data transfer layer that replaces the request-response paradigm of traditional APIs with neural signal propagation. Built for the age of AI, Web3, and quantum computing.",
@@ -185,7 +184,10 @@
     "dark": "/images/ntl-icon-dark.png",
     "href": "https://openntl.org"
   },
-  "favicon": "/images/bundu-ecosystem-icons-nyuchi-icon-dark.png",
+  "favicon": {
+    "light": "/images/ntl-favicon-light.png",
+    "dark": "/images/ntl-favicon-dark.png"
+  },
   "background": {
     "decoration": "grid",
     "color": {
@@ -205,7 +207,6 @@
     "timestamp": true
   },
   "seo": {
-    "indexHiddenPages": false,
     "indexing": "all"
   },
   "banner": {
