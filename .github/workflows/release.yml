@@ -1,0 +1,239 @@
+name: Release
+
+# Publishing is irreversible: npm unpublish is heavily restricted after 72
+# hours, and a GitHub Release tag is what `npm/ntl-cli`'s postinstall fetches
+# from. So this never runs on a push to main — only on an explicit tag, or a
+# dispatch with dry_run for rehearsing the whole thing without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check everything, publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write        # create the release and upload assets
+  id-token: write        # npm provenance attestation
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Refuse to release anything the repository does not agree about. A tag that
+  # disagrees with the manifests would publish one version under another's name.
+  verify:
+    name: Verify version agreement
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      npm_tag: ${{ steps.v.outputs.npm_tag }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        name: Read and cross-check the version
+        run: |
+          set -euo pipefail
+          cargo_v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          cli_v=$(node -p "require('./npm/ntl-cli/package.json').version")
+          mcp_v=$(node -p "require('./mcp/ntl-postgres-mcp-server/package.json').version")
+
+          echo "workspace: $cargo_v"
+          echo "ntl-cli:   $cli_v"
+          echo "mcp:       $mcp_v"
+
+          if [ "$cargo_v" != "$cli_v" ] || [ "$cargo_v" != "$mcp_v" ]; then
+            echo "::error::version mismatch — Cargo.toml $cargo_v, ntl-cli $cli_v, mcp $mcp_v"
+            exit 1
+          fi
+
+          # On a tag, the tag is the authority and must match.
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            tag_v="${GITHUB_REF_NAME#v}"
+            if [ "$tag_v" != "$cargo_v" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match version $cargo_v"
+              exit 1
+            fi
+          fi
+
+          # A prerelease must not land on npm's `latest`, or `npm i @bundu/ntl-cli`
+          # hands a beta to everyone. Derive the dist-tag from the version itself
+          # rather than hardcoding it, so this stays correct after 1.0.
+          if [[ "$cargo_v" == *-* ]]; then
+            npm_tag="${cargo_v#*-}"; npm_tag="${npm_tag%%.*}"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            npm_tag="latest"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$cargo_v"  >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$npm_tag"  >> "$GITHUB_OUTPUT"
+          echo "npm dist-tag: $npm_tag"
+
+      - name: The npm token secret is present
+        # Fail here rather than after the binaries are built and the release is
+        # published, which would leave a half-done release behind.
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is not visible to this workflow. It is an" \
+                 "organisation secret — check it is granted to this repository," \
+                 "and that the name matches exactly (GitHub secret names cannot" \
+                 "contain hyphens, so an 'npm-token' would be NPM_TOKEN)."
+            exit 1
+          fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # One job per asset name in npm/ntl-cli/scripts/install.mjs TARGETS. The names
+  # below must match that table exactly — the postinstall fetches them by name.
+  build:
+    name: ${{ matrix.asset }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false        # one platform failing should not hide the others
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: ntl-x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: ntl-aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: ntl-aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: ntl-x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: ntl-x86_64-pc-windows-msvc.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build the CLI
+        run: cargo build --release -p ntl-cli --target ${{ matrix.target }}
+
+      - name: Name the binary as the postinstall expects
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "target/${{ matrix.target }}/release/ntl.exe" "dist/${{ matrix.asset }}"
+          else
+            cp "target/${{ matrix.target }}/release/ntl" "dist/${{ matrix.asset }}"
+            chmod +x "dist/${{ matrix.asset }}"
+          fi
+
+      - name: It runs
+        # A binary that cannot report its own version is not worth shipping.
+        # Skipped when cross-compiling, where the host cannot execute it.
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: ./dist/${{ matrix.asset }} --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  release:
+    name: GitHub Release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: staging
+          merge-multiple: true
+
+      - name: checksums.txt
+        # `sha256sum` output is exactly the format install.mjs parses:
+        # "<hex>  <bare asset name>", split on whitespace, matched on field 2.
+        # Generated from inside the directory so no path prefix creeps in.
+        run: |
+          set -euo pipefail
+          cd staging
+          ls -l
+          sha256sum ntl-* > checksums.txt
+          cat checksums.txt
+
+      - name: Publish the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=()
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "v${VERSION}" staging/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "v${VERSION}" \
+            --generate-notes \
+            "${flags[@]}"
+
+  # ---------------------------------------------------------------------------
+  # After the release, never before: the postinstall downloads from the release
+  # tag, so publishing first guarantees a window where every install falls back
+  # to "build it from source".
+  npm:
+    name: Publish to npm
+    needs: [verify, release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Build the MCP server
+        # `main` is dist/index.js and dist/ is gitignored, so without this the
+        # published package would point at a file that does not exist.
+        working-directory: mcp/ntl-postgres-mcp-server
+        run: |
+          npm ci
+          npm run build
+          test -f dist/index.js || { echo "::error::build produced no dist/index.js"; exit 1; }
+
+      - name: Publish @bundu/ntl-cli
+        if: github.event_name == 'push'
+        working-directory: npm/ntl-cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: npm publish --access public --tag ${{ needs.verify.outputs.npm_tag }}
+
+      - name: Publish @bundu/ntl-postgres-mcp-server
+        if: github.event_name == 'push'
+        working-directory: mcp/ntl-postgres-mcp-server
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: npm publish --access public --tag ${{ needs.verify.outputs.npm_tag }}
+
+      - name: Dry run summary
+        if: github.event_name != 'push'
+        run: |
+          echo "Dry run: built everything, published nothing."
+          echo "Version:  ${{ needs.verify.outputs.version }}"
+          echo "dist-tag: ${{ needs.verify.outputs.npm_tag }}"
