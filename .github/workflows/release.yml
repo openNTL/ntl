@@ -76,16 +76,23 @@ jobs:
           echo "npm_tag=$npm_tag"  >> "$GITHUB_OUTPUT"
           echo "npm dist-tag: $npm_tag"
 
-      - name: The npm token secret is present
-        # Fail here rather than after the binaries are built and the release is
-        # published, which would leave a half-done release behind.
+      - name: Report which npm credential is available
+        # Deliberately not fatal. There are two viable mechanisms and only one
+        # of them uses a secret:
+        #   - trusted publishing (OIDC), which needs no token at all and is
+        #     what npm's own guidance points at;
+        #   - a token with read-write on the whole @bundu scope.
+        # A token restricted to selected packages cannot create a new one — that
+        # is a 403 on PUT which ignores --otp entirely, so it reads like an auth
+        # failure rather than a permissions one.
         run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN is not visible to this workflow. It is an" \
-                 "organisation secret — check it is granted to this repository," \
-                 "and that the name matches exactly (GitHub secret names cannot" \
-                 "contain hyphens, so an 'npm-token' would be NPM_TOKEN)."
-            exit 1
+          if [ -n "${NPM_TOKEN}" ]; then
+            echo "NPM_TOKEN is visible; it must have read-write on the whole" \
+                 "@bundu scope, not selected packages, to create a new package."
+          else
+            echo "::warning::No NPM_TOKEN visible. This only works if trusted" \
+                 "publishing (OIDC) is configured for both packages on npmjs.com." \
+                 "If it is not, the publish step will fail with a 403."
           fi
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -221,7 +228,18 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
-        run: npm publish --access public --tag ${{ needs.verify.outputs.npm_tag }}
+          TAG: ${{ needs.verify.outputs.npm_tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Idempotent: a re-run after a partial failure should not fail for the
+          # one reason that is not a problem — npm refusing to republish a
+          # version that is already there.
+          if npm view "@bundu/ntl-cli@${VERSION}" version >/dev/null 2>&1; then
+            echo "@bundu/ntl-cli@${VERSION} is already published; skipping."
+          else
+            npm publish --access public --tag "${TAG}"
+          fi
 
       - name: Publish @bundu/ntl-postgres-mcp-server
         if: github.event_name == 'push'
@@ -229,7 +247,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
-        run: npm publish --access public --tag ${{ needs.verify.outputs.npm_tag }}
+          TAG: ${{ needs.verify.outputs.npm_tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          if npm view "@bundu/ntl-postgres-mcp-server@${VERSION}" version >/dev/null 2>&1; then
+            echo "@bundu/ntl-postgres-mcp-server@${VERSION} is already published; skipping."
+          else
+            npm publish --access public --tag "${TAG}"
+          fi
 
       - name: Dry run summary
         if: github.event_name != 'push'
