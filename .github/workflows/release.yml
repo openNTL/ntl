@@ -213,14 +213,25 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
 
-      - name: Build the MCP server
-        # `main` is dist/index.js and dist/ is gitignored, so without this the
-        # published package would point at a file that does not exist.
+      - name: The MCP tarball carries a usable template
+        # No build step: this package has no `main`. Its entry transitively
+        # text-imports a .sql file, which only a bundler can resolve — Node
+        # cannot load .sql at all — so promising Node importability would be a
+        # promise it could never keep. What ships is the source, its tests and
+        # its wrangler config, because the package exists to be copied and
+        # deployed rather than imported.
         working-directory: mcp/ntl-postgres-mcp-server
         run: |
-          npm ci
-          npm run build
-          test -f dist/index.js || { echo "::error::build produced no dist/index.js"; exit 1; }
+          set -euo pipefail
+          npm pack --dry-run 2>&1 | tail -5
+          for required in src/index.ts wrangler.toml README.md; do
+            npm pack --dry-run --json 2>/dev/null \
+              | node -e "
+                  const f=JSON.parse(require('fs').readFileSync(0,'utf8'))[0].files.map(x=>x.path);
+                  if (!f.includes('$required')) { console.error('::error::$required missing from the tarball'); process.exit(1); }
+                "
+          done
+          echo "tarball carries src/, wrangler.toml and README.md"
 
       - name: Publish @bundu/ntl-cli
         if: github.event_name == 'push'
