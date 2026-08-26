@@ -102,6 +102,7 @@ Full documentation is available at [openntl.org](https://openntl.org).
 ntl/
 ├── runtime/            # Rust reference implementation
 │   ├── ntl-core/       # Core library — pure Rust, no runtime assumptions
+│   ├── ntl-net/        # TCP transport, authenticated handshake, sessions
 │   ├── ntl-store-sqlite/    # Default storage backend
 │   ├── ntl-store-postgres/  # Full-node storage backend (stub)
 │   ├── ntl-cli/        # CLI tooling

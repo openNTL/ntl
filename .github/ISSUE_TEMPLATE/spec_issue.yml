@@ -1,0 +1,78 @@
+name: Specification ambiguity or interop failure
+description: A normative requirement that is unclear, contradictory, or unimplementable as written
+type: Task
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        The most valuable report this project can receive. The specification is
+        at `beta_0.0.0`, and the prefix is waiting on one thing: a second
+        independent implementation interoperating. Interop has so far been shown
+        only between two instances of the *same* implementation, which tests the
+        wire format but not the prose — so an ambiguity found while implementing
+        is evidence nothing else can produce.
+
+
+        Use this when the spec is at fault or you cannot tell. Use a bug report
+        when the spec is clear and the reference implementation disagrees with it.
+
+  - type: input
+    id: document
+    attributes:
+      label: Document and section
+      description: Which specification page, and which numbered section or rule.
+      placeholder: spec/propagation-rules — Rule 5
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirement
+    attributes:
+      label: The requirement, quoted
+      description: Paste the text as written, so the discussion is about the same words.
+    validations:
+      required: true
+
+  - type: textarea
+    id: readings
+    attributes:
+      label: The competing readings
+      description: >-
+        What it could mean, and why more than one reading survives the
+        surrounding text. If one reading is unimplementable, say what stops it.
+      placeholder: |
+        Reading A: the check applies before the signature is verified.
+        Reading B: after. The section's ordering implies A, but A lets
+        unauthenticated traffic claim a dedup entry, which Rule 4 exists to prevent.
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: What your implementation does
+      description: >-
+        Which reading you took, and what happened. If two implementations
+        disagreed on the wire, the observed exchange is the useful part.
+
+  - type: dropdown
+    id: interop
+    attributes:
+      label: Did this break interoperability?
+      options:
+        - "Yes — two implementations failed to interoperate"
+        - "No — found by reading, not by failing"
+        - "Not yet tested against another implementation"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed wording
+      description: >-
+        Optional, and welcome. A normative change lands through
+        [an RFC](https://openntl.org/governance/rfc-process), but wording
+        proposed here is what an RFC gets drafted from — and a clarification
+        that changes no requirement can be fixed directly.

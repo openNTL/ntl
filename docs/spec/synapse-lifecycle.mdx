@@ -198,6 +198,20 @@ During handshake, nodes negotiate transport:
 2. The highest-priority mutually supported transport is selected
 3. QUIC is the RECOMMENDED default
 
+<Note>
+  **Specified and unimplemented.** The reference implementation performs no
+  negotiation: `ntl-net` opens a TCP connection and runs the three-message
+  authenticated handshake over it. Nothing advertises a transport list and
+  nothing selects from one, so step 1 and step 2 have no counterpart in code
+  and the RECOMMENDED default in step 3 is not what runs.
+
+  This is a gap in the implementation, not a defect in the requirement — but an
+  implementer should know that interoperating with the reference
+  implementation today means TCP, and that a peer expecting to negotiate will
+  find no one negotiating back. Tracking:
+  [openNTL/ntl#15](https://github.com/openNTL/ntl/issues/15).
+</Note>
+
 ## Synapse Limits
 
 Nodes SHOULD enforce a maximum synapse count to prevent resource exhaustion. The RECOMMENDED default is 1,000 active synapses per node. When the limit is reached, the node MUST reject new synapse requests or prune the weakest existing synapse.

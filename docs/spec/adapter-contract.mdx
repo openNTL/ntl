@@ -7,6 +7,19 @@ description: "Normative specification for NTL protocol-translation adapters — 
 ---
 **Version:** beta_0.0.0
 
+<Note>
+  **Implementation status.** The `Adapter` trait this document specifies exists
+  in `ntl-core` and is exercised by the test suite. No adapter implements it:
+  `adapters/web2`, `adapters/web3` and `adapters/legacy` are placeholder crates
+  containing a single doc comment each, and no binary reads an `[adapter.*]`
+  configuration table.
+
+  This page is therefore normative and unimplemented at the same time — the
+  contract is fixed, the implementations are not written. The
+  [adapter guides](/adapters/overview) describe intended behaviour on top of
+  it. Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+</Note>
+
 ## Overview
 
 Adapters translate between NTL signals and external protocols. This document specifies the interface that all adapters MUST implement.

@@ -27,9 +27,15 @@ prune_after_hours = 168      # 7 days
 max_synapses = 1000
 attenuation_factor = 0.9
 
-[synapse.transport]
-preferred = "quic"
-fallback = "tcp"
+# Transport selection. Commented out because neither key is read by anything
+# yet: the reference implementation is TCP-only, and `quic` names a transport
+# that does not exist in it. Leaving them live would repeat the mistake
+# `crypto_module` made when it defaulted to "pq-v1" and was read by nothing —
+# a setting an operator can change with no effect is worse than no setting,
+# because it reads as a supported choice.
+# [synapse.transport]
+# preferred = "quic"
+# fallback = "tcp"
 
 [propagation]
 default_ttl = 10

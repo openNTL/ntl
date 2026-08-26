@@ -5,6 +5,20 @@ description: "Bring REST and SOAP APIs you cannot modify onto NTL. How the legac
 "og:description": "Wrap existing REST, SOAP, and custom API endpoints as NTL signal handlers without modifying the original codebase."
 "twitter:title": "NTL Legacy API Adapter"
 ---
+<Warning>
+  **Design document, not shipped code.** `adapters/web2`, `adapters/web3` and
+  `adapters/legacy` each contain a single doc comment and no implementation.
+  Nothing on this page can be configured or run today.
+
+  What *does* exist is the contract they will implement: the `Adapter` trait in
+  `ntl-core` ([spec/adapter-contract](/spec/adapter-contract)) is real,
+  normative and tested. This page describes the intended behaviour on top of
+  it, and the configuration keys below are proposed rather than parsed — no
+  `[adapter.*]` table is read by any binary.
+
+  Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+</Warning>
+
 The Legacy API adapter wraps existing REST, SOAP, and custom API endpoints, exposing them as NTL signal handlers. This enables organizations to bring legacy systems into the NTL network without modifying the original codebase.
 
 ## Use Case

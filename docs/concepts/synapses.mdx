@@ -68,7 +68,7 @@ Nodes discover potential synapse partners through:
 When two nodes decide to form a synapse, they perform a handshake:
 
 1. Exchange node identities and capabilities
-2. Negotiate transport binding (QUIC preferred, TCP fallback)
+2. Negotiate transport binding (TCP only today — see [Transport Bindings](#transport-bindings))
 3. Exchange cryptographic material via the pluggable crypto module
 4. Establish initial weight (typically 0.1)
 
@@ -123,15 +123,30 @@ After a configurable dormancy period (default: 7 days), dormant synapses are pru
 
 Synapses are transport-agnostic. The actual bytes move over a configurable transport layer:
 
-| Transport | Use Case | Properties |
-|---|---|---|
-| QUIC | Default for internet | Multiplexed, encrypted, low latency |
-| TCP | Fallback | Reliable, widely supported |
-| Unix Socket | Same-machine nodes | Zero network overhead |
-| Bluetooth LE | Proximity mesh | Offline-capable, IoT |
-| Custom | Specialized | Application-defined |
+| Transport | Use Case | Properties | Status |
+|---|---|---|---|
+| TCP | Everything, today | Reliable, widely supported | **Implemented** |
+| QUIC | Intended default for internet | Multiplexed, encrypted, low latency | Design |
+| Unix Socket | Same-machine nodes | Zero network overhead | Design |
+| Bluetooth LE | Proximity mesh | Offline-capable, IoT | Design |
+| Custom | Specialized | Application-defined | Design |
 
-QUIC is the preferred transport because it provides multiplexing (multiple signal streams over one connection), built-in encryption, and connection migration — all critical for mobile and intermittent-connectivity environments.
+<Warning>
+  **The reference implementation is TCP-only, and performs no transport
+  negotiation.** `ntl-net` opens a TCP connection and runs a three-message
+  authenticated handshake over it; there is no step at which transports are
+  advertised or selected.
+
+  QUIC is the intended default, for good reasons — multiplexing many signal
+  streams over one connection, built-in encryption, and connection migration
+  across network changes, all of which matter for mobile and intermittent
+  links. None of it is written yet.
+
+  `[synapse.transport]` is commented out of `config.example.toml` for this
+  reason: `preferred` and `fallback` were read by nothing, and `preferred =
+  "quic"` named a transport that does not exist. Tracking:
+  [openNTL/ntl#15](https://github.com/openNTL/ntl/issues/15).
+</Warning>
 
 ## Synapse Topology
 
@@ -165,7 +180,9 @@ dormancy_threshold = 0.01
 prune_after_hours = 168      # 7 days
 max_synapses = 1000          # Per-node connection limit
 
-[synapse.transport]
-preferred = "quic"
-fallback = "tcp"
+# Not read by anything yet, and `quic` is not implemented — see the warning
+# under Transport Bindings above.
+# [synapse.transport]
+# preferred = "quic"
+# fallback = "tcp"
 ```

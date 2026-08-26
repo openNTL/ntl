@@ -5,6 +5,20 @@ description: "Connect NTL to blockchain networks, decentralised identifiers and 
 "og:description": "Enable NTL signals to interact with blockchain networks, decentralized identity, and token systems."
 "twitter:title": "NTL Web3 Adapter"
 ---
+<Warning>
+  **Design document, not shipped code.** `adapters/web2`, `adapters/web3` and
+  `adapters/legacy` each contain a single doc comment and no implementation.
+  Nothing on this page can be configured or run today.
+
+  What *does* exist is the contract they will implement: the `Adapter` trait in
+  `ntl-core` ([spec/adapter-contract](/spec/adapter-contract)) is real,
+  normative and tested. This page describes the intended behaviour on top of
+  it, and the configuration keys below are proposed rather than parsed — no
+  `[adapter.*]` table is read by any binary.
+
+  Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+</Warning>
+
 The Web3 adapter enables NTL signals to interact with blockchain networks, decentralized identity systems, and token mechanisms. NTL is Web3-compliant without being Web3-dependent — the protocol itself doesn't require any chain, but it can seamlessly interface with them.
 
 ## Capabilities

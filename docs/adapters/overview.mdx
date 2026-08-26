@@ -6,6 +6,19 @@ mode: "wide"
 "og:description": "Adapters are the compatibility boundary where NTL interfaces with existing systems, translating between signal-based transport and traditional protocols."
 "twitter:title": "NTL Adapters"
 ---
+<Warning>
+  **No adapter is implemented yet.** The three adapter crates
+  (`adapters/web2`, `adapters/web3`, `adapters/legacy`) are placeholders — one
+  doc comment each. The `Adapter` trait they will implement is real and
+  specified in [spec/adapter-contract](/spec/adapter-contract); everything
+  described here about specific adapters is design intent.
+
+  This page is kept because the boundary it describes is a genuine
+  architectural decision, not because the code behind it exists.
+
+  Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+</Warning>
+
 **Adapters** are the compatibility boundary where NTL interfaces with existing systems. They translate between NTL's signal-based transport and traditional protocols.
 
 Think of adapters as the peripheral nervous system — they interface with the external world using whatever language external systems speak, while internally everything is neural signals.
