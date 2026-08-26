@@ -1,0 +1,78 @@
+name: Feature request
+description: Propose new functionality in the reference implementation
+type: Feature
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **If this changes the protocol, it needs an RFC rather than an issue** —
+        a new signal field, a changed propagation rule, anything a second
+        implementation would have to match. See
+        [the RFC process](https://openntl.org/governance/rfc-process) and start
+        from `rfcs/0000-template.md`. Implementation work that leaves the wire
+        format alone belongs here.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What you cannot do today. Describe the situation rather than the feature —
+        it often turns out there is a better fix than the one that came to mind
+        first.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What you think should happen, in as much detail as you have.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - ntl-core
+        - ntl-net
+        - ntl-cli
+        - ntl-node / ntl-edge
+        - Storage backend
+        - Postgres MCP server
+        - npm packaging
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this has to respect
+      description: >-
+        Tick the ones you have checked against. These are not bureaucracy — each
+        is enforced by CI and has broken a change before.
+      options:
+        - label: >-
+            `ntl-core` keeps building for `wasm32-unknown-unknown` — no async
+            runtime, no transport, no ambient clock or randomness (both are
+            injected through `time::Clock` and `rng::Rng`)
+        - label: No `unsafe` (the workspace sets `#![forbid(unsafe_code)]`)
+        - label: >-
+            No change to a normative requirement, or an RFC is opened alongside
+            this
+        - label: >-
+            Does not weaken anything in `spec/threat-model` — and if it changes
+            what an attacker can do, says so
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >-
+        What else would solve the problem, and why this instead. Worth a line
+        even when the answer is short.

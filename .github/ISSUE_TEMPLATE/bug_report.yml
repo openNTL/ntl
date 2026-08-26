@@ -1,0 +1,108 @@
+name: Bug report
+description: Something behaves differently from what the specification or the docs say
+type: Bug
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Not for security vulnerabilities.** If this is exploitable, close this
+        and mail security@openntl.org instead — a public issue tells an attacker
+        before it tells us.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where the behaviour is, as best you can tell. Guessing is fine.
+      options:
+        - ntl-core (signals, synapses, activation, propagation, learning)
+        - ntl-net (transport, handshake, sessions)
+        - ntl-cli
+        - ntl-node / ntl-edge
+        - ntl-store-sqlite
+        - ntl-store-postgres
+        - Postgres MCP server
+        - npm CLI wrapper
+        - Documentation or specification
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >-
+        What you observed, and what you expected instead. If the specification
+        says otherwise, link the section — that turns a report into a fix.
+      placeholder: |
+        Expected: a routeless node returns a negative receipt for an acknowledged signal.
+        Observed: it reported `delivered`.
+        spec/delivery-semantics says failure is always reported for `acknowledged`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: >-
+        The smallest sequence that shows it. A failing test is the most useful
+        form this can take; exact commands are the next best.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: "`ntl status` output"
+      description: >-
+        The `routing model` block especially. `exploration` at zero means the
+        node has stopped learning, and `pending` near 100% means no receipts are
+        arriving so the weights reflect nothing — either one changes what this
+        report means. Redact node IDs if you would rather not publish them.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `ntl --version`, or the crate version and commit if you built from source.
+      placeholder: ntl 0.2.0-beta.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Storage backend
+      options:
+        - sqlite
+        - postgres
+        - memory
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Platform and Rust version
+      description: >-
+        `rustc --version` and your OS. The project requires Rust 1.85+, and CI
+        pins clippy at stable and 1.98.
+      placeholder: rustc 1.98.0, Ubuntu 24.04 aarch64
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >-
+        The parts of your config that differ from `config.example.toml`. The
+        learning, propagation and activation tables matter most — several
+        behaviours that look like bugs are a threshold or a cap doing its job.
+      render: toml

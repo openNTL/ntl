@@ -1,0 +1,16 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/openNTL/ntl/blob/main/SECURITY.md
+    about: >-
+      Do not open a public issue. Report privately to security@openntl.org.
+      SECURITY.md says what is in scope and what to include.
+  - name: Protocol or specification change
+    url: https://openntl.org/governance/rfc-process
+    about: >-
+      Changing a normative requirement needs an RFC, not an issue. Start from
+      rfcs/0000-template.md. Report an ambiguity you found while implementing
+      as a spec issue instead.
+  - name: Documentation
+    url: https://openntl.org
+    about: Specifications, guides and API reference.
