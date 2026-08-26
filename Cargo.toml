@@ -49,11 +49,6 @@ rand_chacha = "0.3"
 toml = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Networking
-quinn = "0.11"          # QUIC implementation
-rustls = "0.23"
-rcgen = "0.13"
-
 # CLI
 clap = { version = "4", features = ["derive"] }
 colored = "2"

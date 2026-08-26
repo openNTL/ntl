@@ -91,9 +91,10 @@ body:
     attributes:
       label: Platform and Rust version
       description: >-
-        `rustc --version` and your OS. The project requires Rust 1.85+, and CI
-        pins clippy at stable and 1.98.
-      placeholder: rustc 1.98.0, Ubuntu 24.04 aarch64
+        `rustc --version` and your OS. The workspace declares `rust-version =
+        "1.85"`, and CI has a job pinned to exactly that to keep the floor
+        honest; every other Rust job runs on stable.
+      placeholder: rustc 1.85.1, Ubuntu 24.04 aarch64
     validations:
       required: true
 

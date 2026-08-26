@@ -5,6 +5,20 @@ description: "Expose an NTL node over HTTP, gRPC, WebSocket or GraphQL, so exist
 "og:description": "Translate HTTP, gRPC, WebSocket, and GraphQL protocols into NTL signals and back."
 "twitter:title": "NTL Web2 Adapter"
 ---
+<Warning>
+  **Design document, not shipped code.** `adapters/web2`, `adapters/web3` and
+  `adapters/legacy` each contain a single doc comment and no implementation.
+  Nothing on this page can be configured or run today.
+
+  What *does* exist is the contract they will implement: the `Adapter` trait in
+  `ntl-core` ([spec/adapter-contract](/spec/adapter-contract)) is real,
+  normative and tested. This page describes the intended behaviour on top of
+  it, and the configuration keys below are proposed rather than parsed — no
+  `[adapter.*]` table is read by any binary.
+
+  Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+</Warning>
+
 The Web2 adapter translates traditional web protocols into NTL signals and back. It enables existing web applications, microservices, and APIs to participate in the NTL network without modification.
 
 ## Supported Protocols
