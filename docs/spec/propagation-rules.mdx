@@ -1,11 +1,11 @@
 ---
 title: "Propagation Rules"
-description: "Specification for signal routing through the NTL network"
+description: "Normative rules for routing a signal through an NTL network: TTL, loop prevention, deduplication, signature verification and path selection."
 "og:title": "Propagation Rules — NTL Specification"
 "og:description": "Formal specification for how signals route through the NTL network based on synapse weight, activation, and topology."
 "twitter:title": "NTL Propagation Rules Spec"
 ---
-**Version:** 0.1.0-draft
+**Version:** beta_0.0.0
 
 ## Overview
 
@@ -23,15 +23,109 @@ A node MUST NOT propagate a signal if its own Node ID appears in the signal's tr
 
 ### Rule 3: Weight Floor
 
-A node MUST NOT propagate a signal with weight below `min_propagation_weight` (default: 0.01). Signals that attenuate below this floor are effectively absorbed.
+A node MUST NOT propagate a signal with weight below
+`min_propagation_weight` (default: 0.01). Signals that attenuate below this
+floor are effectively absorbed.
+
+**Exception for acknowledged delivery.** Silent absorption MUST NOT apply to
+a signal whose delivery class is `acknowledged`. Such a signal's weight is
+clamped at the floor while TTL remains, and if it still cannot be propagated
+the node MUST emit a negative receipt with reason `below_threshold`. See
+[delivery-semantics](/spec/delivery-semantics) §2.2 — this exception is what
+makes NTL usable for transactional traffic.
 
 ### Rule 4: Deduplication
 
-A node MUST maintain a deduplication cache of recently seen signal IDs. If a signal ID is already in the cache, the signal MUST be silently dropped. The cache MUST retain entries for at least `max_ttl * avg_propagation_time` duration.
+A node MUST maintain a deduplication cache of recently seen signal IDs. If a
+signal ID is already in the cache, the signal MUST be dropped. The cache
+MUST retain entries for at least `max_ttl * avg_propagation_time`, and at
+least the longest sender retry budget on the network (default 300 s).
+
+The check and the insert MUST be **atomic**: two concurrent arrivals of the
+same signal MUST NOT both observe "not seen". A read followed by a separate
+write does not satisfy this rule, because the race it admits is precisely
+the duplicate propagation the rule exists to prevent. See
+[storage-interface](/spec/storage-interface) §3.
+
+A duplicate of an `acknowledged` signal that this node already **handled**
+MUST NOT be handled again, and the node MUST re-emit the original receipt
+rather than dropping the duplicate silently — otherwise a sender whose first
+receipt was lost is stranded.
 
 ### Rule 5: Signature Verification
 
-A node MUST verify the signal's cryptographic signature before processing or propagating. Invalid signatures MUST result in the signal being dropped and the originating synapse's weight being reduced.
+A node MUST verify the signal's cryptographic signature before processing or
+propagating. Invalid signatures MUST result in the signal being dropped and
+the arriving synapse's weight being reduced.
+
+### Ordering: Size First, Everything Else After
+
+The **size bound MUST be enforced before verification**, and before any buffer
+is allocated for the frame. That is the ordering constraint that matters: it is
+the only cheap check standing between an attacker-supplied length and this
+node's memory.
+
+**Deduplication and TTL MUST be checked *after* verification.** 0.2.0-draft
+required the opposite — verification after size, TTL *and* dedup, to keep an
+attacker from forcing signature work with malformed traffic. Implementing it
+showed the ordering costs more than it saves, in two specific ways:
+
+- **Deduplication is a write, not a read.** Claiming a signal identifier is
+  what makes it a duplicate. Checking it before verification therefore lets
+  *unauthenticated* traffic occupy the dedup cache and suppress the genuine
+  signal that follows — a cheaper and more damaging attack than the CPU cost
+  the ordering was defending against, and one that costs the attacker nothing
+  because the resulting timeouts apply negative weight updates the influence
+  cap deliberately does not bound ([threat-model](/spec/threat-model) §8).
+- **A TTL refusal owes an acknowledged sender a receipt**
+  ([delivery-semantics](/spec/delivery-semantics) §2.2). Emitting one for a
+  signal that has not been verified lets an attacker choose when this node
+  emits traffic, and to whom.
+
+The CPU argument is also weaker than it looks: an Ed25519 verification is tens
+of microseconds against a frame already read off the socket and size-bounded
+before allocation.
+
+An implementation MUST NOT "restore" the earlier ordering on the strength of
+the DoS argument alone. Where signature verification is genuinely too
+expensive to run per frame, the answer is a cheap pre-filter with no
+side effects — a per-peer rate limit, or a transport-level MAC — not moving a
+state-mutating check in front of authentication.
+
+The penalty and its recovery curve are specified in
+[threat-model](/spec/threat-model) §4: the synapse's weight is multiplied by
+`(1 − p)` with `p = 0.5` by default, the decision resolves with reward
+`−1.0`, and recovery is by ordinary learning only. Repeated failures
+compound, and a synapse accumulating
+`signature_failure_prune_threshold` (default 5) failures within one
+influence window MUST be pruned. The count is over a window, so it and the
+window's start MUST be persisted with the synapse: a restart must not be a
+free amnesty for an attacker part-way to the threshold. Re-formation of a
+pruned synapse MUST be refused until `signature_failure_cooldown_secs`
+(default 3600) has elapsed, or the prune costs an attacker one handshake.
+
+**An unresolvable origin key is a drop, not a pass.** Verification needs the
+origin's public key, and a node ID is that key's hash, so the key cannot be
+derived from the identifier — a node holds it only for origins it has met. A
+node that cannot resolve the key MUST drop the signal. Forwarding it instead
+would let any connected peer inject traffic under any identity, at no cost,
+which defeats every per-identity bound in the protocol. Because the peer that
+relayed it is not necessarily at fault, this drop MUST NOT penalise the
+arriving synapse, and MUST be reported separately from a signature that failed
+to verify. See [threat-model](/spec/threat-model) §9 for the consequence: in
+the absence of key distribution, verified delivery is one hop.
+
+### Rule 6: Outcome Journalling
+
+A node MUST journal every propagation decision it makes for an
+`acknowledged` signal, and SHOULD journal decisions for `best-effort`
+signals. A journalled decision records the chosen synapse, the score it was
+assigned, and whether it was reached by exploration.
+
+Decisions that receive no receipt within the aggregation window MUST be
+resolved as `timed_out`. A node that leaves decisions pending indefinitely
+does not learn from failure, since failure is exactly what never produces a
+receipt. See [learning-model](/spec/learning-model) §1.
 
 ## Propagation Scopes
 
@@ -41,17 +135,73 @@ The signal MUST be propagated to ALL active synapses (excluding the synapse it a
 
 **Constraints:**
 - Flood signals SHOULD have low TTL (≤ 3) to prevent network saturation
+- A node MUST NOT propagate a flood whose hop count has reached the scope's
+  `max_hops`, and MUST still accept and process one that has. The bound is on
+  forwarding, not on acceptance: enforcing it as an admission check makes the
+  outermost ring of a flood reject the signal instead of delivering it, so
+  `max_hops: n` reaches `n − 1` rings. Flood is the only scope that ignores `max_propagation_fanout`,
+  so depth is the sole bound on total fan-out: a flood of depth `d` across
+  nodes of degree `f` touches on the order of `f^d` synapses. An
+  implementation that declares `max_hops` and does not enforce it has a flood
+  bounded only by TTL, which the emitter did not choose.
 - Nodes MAY rate-limit flood propagation
 
 ### Weighted (scope = 1) — Default
 
-The signal is propagated to synapses selected by the path scoring function, ordered by score descending. The number of synapses selected is bounded by `max_propagation_fanout` (default: 5).
+The signal is propagated to synapses selected from the path scoring
+function, bounded by `max_propagation_fanout` (default: 5).
+
+**Selection MUST be stochastic, not deterministic top-N.** Earlier drafts
+specified taking the highest-scoring `k` synapses. That is pure
+exploitation, and it ossifies routing: an unselected synapse is never
+rewarded, so its weight only decays, so it is never selected. Startup
+conditions become permanent and the network cannot discover a path that
+became good later.
+
+Conforming implementations MUST sample from the scored candidates. The
+RECOMMENDED policy is softmax over scores with temperature `τ`, sampling `k`
+without replacement:
+
+```
+P(sᵢ) = exp(score(sᵢ) / τ) / Σⱼ exp(score(sⱼ) / τ)
+```
+
+ε-greedy is also permitted for nodes without floating-point `exp`. Both are
+specified in [learning-model](/spec/learning-model) §4.2, along with the
+requirement that `τ` never reach zero.
+
+Synapses below `min_synapse_weight` remain excluded: exploration widens the
+choice among *eligible* paths, it does not override eligibility.
 
 ### Targeted (scope = 2)
 
 The signal is directed toward a specific destination node. The propagation engine selects the synapse most likely to reach the destination, based on topology knowledge and signal trace history.
 
-If the destination is a direct synapse, the signal MUST be sent directly. If not, the signal is forwarded to the synapse with the highest affinity for the destination's region of the topology.
+If the destination is a direct synapse, the signal MUST be sent directly. If
+not, the signal is forwarded to the synapse with the highest affinity for
+the destination's region of the topology.
+
+`Targeted` selection with a direct synapse MUST NOT explore: exploration
+serves routing under uncertainty, and there is none here.
+
+#### Receipt Handling
+
+Receipts (`signal_type = Receipt`) route with `Targeted` scope toward the
+origin of the signal they acknowledge. Nodes handling a receipt MUST:
+
+1. Verify its signature. An unverifiable receipt MUST be discarded and MUST
+   NOT update any weight — forged receipts would otherwise be the cheapest
+   attack on the routing model.
+2. Match its `correlation_id` against a journalled decision, and confirm it
+   arrived from the peer that decision was routed to. Unmatched receipts are
+   discarded.
+3. Resolve that decision exactly once. A second receipt for an
+   already-resolved decision MUST be ignored, not applied — this is what
+   makes at-least-once retries safe.
+4. Prefer the reverse of the recorded trace where those synapses are still
+   available, falling back to ordinary `Targeted` routing otherwise.
+5. Never request a receipt for a receipt. Receipts are not acknowledged, so
+   the protocol cannot recurse.
 
 ### Gradient (scope = 3)
 
@@ -73,7 +223,18 @@ Where:
 - `type_affinity = historical_success_rate_for_signal_type`
 - `recency_score = 1.0 / (1.0 + hours_since_last_active)`
 
-Default weights: `W_weight = 0.4, W_latency = 0.2, W_affinity = 0.3, W_recency = 0.1`
+Default weights: `W_weight = 0.4, W_latency = 0.2, W_affinity = 0.3,
+W_recency = 0.1`
+
+The score orders candidates; it does not by itself select them. Selection
+samples from the scored set (see Weighted scope above).
+
+`synapse.weight` and `type_affinity` are **learned** state, updated from
+delivery outcomes rather than configured. The update rule, the decay
+half-life that keeps them current, the normalisation that keeps them
+bounded, and the per-identity caps that keep them honest are all specified
+in [learning-model](/spec/learning-model). This document specifies how
+weights are *used*; that one specifies how they *change*.
 
 ## Attenuation
 
@@ -83,7 +244,20 @@ When propagating a signal, the node MUST attenuate the signal's weight:
 signal.weight *= synapse.attenuation_factor
 ```
 
-The default attenuation factor is 0.9. Synapses MAY configure different attenuation factors.
+The default attenuation factor is 0.9. Synapses MAY configure different
+attenuation factors.
+
+For an `acknowledged` signal the result MUST be clamped at
+`min_propagation_weight` while TTL remains:
+
+```
+signal.weight = max(signal.weight * synapse.attenuation_factor,
+                    min_propagation_weight)
+```
+
+Without the clamp, a path of more than a few hops guarantees a
+`below_threshold` rejection regardless of routing quality, which would make
+the acknowledged class unusable at any distance.
 
 ## Trace Management
 
@@ -93,3 +267,12 @@ When a node propagates a signal:
 3. Nodes MAY truncate the oldest entries if the trace exceeds 64
 
 For privacy-sensitive deployments, trace recording MAY be disabled. In this case, loop prevention relies solely on the deduplication cache.
+
+
+## Related
+
+- [learning-model](/spec/learning-model) — how weights and affinity are learned
+- [delivery-semantics](/spec/delivery-semantics) — best-effort versus acknowledged
+- [activation-model](/spec/activation-model) — admission, queueing, and backpressure
+- [threat-model](/spec/threat-model) — adversarial analysis of learned routing
+- [storage-interface](/spec/storage-interface) — what the dedup cache and journal must guarantee

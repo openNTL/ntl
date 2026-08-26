@@ -1,0 +1,291 @@
+/**
+ * Read-only enforcement and identifier quoting.
+ *
+ * The most important tests in the suite. If read-only enforcement leaks, an
+ * agent can mutate a production database through a server the operator
+ * believed was safe.
+ *
+ * Each write below is a real bypass of a naive keyword blocklist — the reason
+ * `safety.ts` delegates to Postgres instead of parsing SQL.
+ */
+
+import { beforeAll, afterAll, describe, expect, it } from "vitest";
+
+import { isReadOnlyViolation, quoteIdent, quoteRelation } from "../src/safety.js";
+import { executeSql } from "../src/tools/sql.js";
+import type { SqlExecutor } from "../src/types.js";
+import { backends, textOf } from "./harness.js";
+
+describe("quoteIdent", () => {
+  it("accepts valid identifiers", () => {
+    expect(quoteIdent("ntl")).toBe('"ntl"');
+    expect(quoteIdent("_private")).toBe('"_private"');
+    expect(quoteIdent("tbl$1")).toBe('"tbl$1"');
+    expect(quoteIdent("MixedCase")).toBe('"MixedCase"');
+  });
+
+  it("rejects injection attempts", () => {
+    // Identifiers cannot be bound as parameters, so this is the only guard.
+    for (const bad of [
+      'ntl"; DROP TABLE users; --',
+      "ntl; DROP TABLE users",
+      "ntl'",
+      'ntl"',
+      "ntl schema",
+      "ntl-schema",
+      "ntl.schema",
+      "1ntl",
+      "",
+      "ntl\\",
+      // Written as an escape, not a literal NUL: a raw NUL byte makes git
+      // treat this whole file as binary, so the diff shows "Bin 8416 -> 11419"
+      // and every test in it becomes unreviewable in a pull request.
+      "ntl\u0000",
+      "ntl\n; DROP TABLE t",
+    ]) {
+      expect(() => quoteIdent(bad), `should reject ${JSON.stringify(bad)}`).toThrow();
+    }
+  });
+
+  it("rejects identifiers past Postgres' 63-character limit", () => {
+    // Silently accepting a longer name would mean operating on a different
+    // object than the caller asked for, since Postgres truncates.
+    expect(() => quoteIdent("a".repeat(64))).toThrow(/63/);
+    expect(quoteIdent("a".repeat(63))).toBe(`"${"a".repeat(63)}"`);
+  });
+
+  it("quotes schema-qualified relations and rejects deeper paths", () => {
+    expect(quoteRelation("ntl.synapses")).toBe('"ntl"."synapses"');
+    expect(quoteRelation("synapses")).toBe('"synapses"');
+    expect(() => quoteRelation("a.b.c")).toThrow();
+    expect(() => quoteRelation("a.b; DROP TABLE t")).toThrow();
+  });
+});
+
+describe("isReadOnlyViolation", () => {
+  it("matches on SQLSTATE rather than message text", () => {
+    // Matching text would break under a different server locale.
+    expect(isReadOnlyViolation({ code: "25006" })).toBe(true);
+    expect(isReadOnlyViolation({ code: "42P01" })).toBe(false);
+    expect(isReadOnlyViolation(new Error("cannot execute INSERT"))).toBe(false);
+    expect(isReadOnlyViolation(null)).toBe(false);
+    expect(isReadOnlyViolation(undefined)).toBe(false);
+    expect(isReadOnlyViolation("25006")).toBe(false);
+  });
+});
+
+for (const backend of backends()) {
+  describe(`read-only enforcement (${backend.name})`, () => {
+    let db: SqlExecutor;
+
+    beforeAll(async () => {
+      db = await backend.create();
+      // Drop first: a leftover row from a previous run would make the
+      // "unchanged" assertion pass for the wrong reason.
+      await db.query("DROP TABLE IF EXISTS canary CASCADE");
+      await db.query("CREATE TABLE canary (id int PRIMARY KEY, v text)");
+      await db.query("INSERT INTO canary VALUES (1, 'original')");
+      // And drop the tables a *successful* bypass would leave behind. Without
+      // this, a run against a real server that once had the bypass keeps
+      // failing afterwards — which is how the escape tests below were first
+      // confirmed to be real, but is not a state the suite should carry.
+      for (const table of ["evil", "evil2", "evil3"]) {
+        await db.query(`DROP TABLE IF EXISTS ${table} CASCADE`);
+      }
+      await db.query("DROP SCHEMA IF EXISTS evil_schema CASCADE");
+    });
+
+    afterAll(async () => {
+      await db?.close();
+    });
+
+    const run = (query: string) =>
+      executeSql(db, false, {
+        query,
+        params: [],
+        limit: 100,
+        response_format: "markdown",
+      });
+
+    it("permits reads", async () => {
+      const result = await run("SELECT v FROM canary WHERE id = 1");
+      expect(result.isError).toBeFalsy();
+      expect(textOf(result)).toContain("original");
+    });
+
+    // Each of these is a real bypass of a leading-keyword blocklist.
+    const writes: [string, string][] = [
+      ["plain INSERT", "INSERT INTO canary VALUES (99, 'hacked')"],
+      ["plain UPDATE", "UPDATE canary SET v = 'hacked' WHERE id = 1"],
+      ["plain DELETE", "DELETE FROM canary WHERE id = 1"],
+      ["DDL", "CREATE TABLE evil (id int)"],
+      ["DROP", "DROP TABLE canary"],
+      [
+        "write hidden in a CTE behind SELECT",
+        "WITH x AS (DELETE FROM canary WHERE id = 1 RETURNING *) SELECT * FROM x",
+      ],
+      [
+        "write hidden in a CTE behind WITH",
+        "WITH x AS (UPDATE canary SET v = 'hacked' RETURNING *) SELECT count(*) FROM x",
+      ],
+      ["INSERT with RETURNING", "INSERT INTO canary VALUES (98, 'x') RETURNING id"],
+      ["TRUNCATE", "TRUNCATE canary"],
+      ["ALTER", "ALTER TABLE canary ADD COLUMN pwned text"],
+      ["comment-prefixed write", "/* SELECT */ INSERT INTO canary VALUES (97, 'x')"],
+      [
+        "whitespace-and-newline-prefixed write",
+        "\n\n   \t INSERT INTO canary VALUES (96, 'x')",
+      ],
+      ["case-varied write", "InSeRt InTo canary VALUES (95, 'x')"],
+      ["SELECT INTO, which creates a table", "SELECT * INTO evil2 FROM canary"],
+      ["CREATE SCHEMA", "CREATE SCHEMA evil_schema"],
+      ["GRANT", "GRANT ALL ON canary TO PUBLIC"],
+    ];
+
+    for (const [label, sql] of writes) {
+      it(`refuses ${label}`, async () => {
+        const result = await run(sql);
+        expect(result.isError, `${label} should have been refused`).toBe(true);
+        expect(textOf(result).toLowerCase()).toMatch(
+          /read-only|read only|cannot execute/,
+        );
+      });
+    }
+
+    // The bypass class the sixteen above do not cover: not a cleverly-phrased
+    // write, but a script that ends the read-only transaction and then writes
+    // in the ordinary way. This is the one thing `BEGIN TRANSACTION READ ONLY`
+    // cannot stop by itself, so it is closed at the protocol layer instead.
+    const escapes: [string, string][] = [
+      ["COMMIT then INSERT", "COMMIT; INSERT INTO canary VALUES (89, 'escaped')"],
+      ["COMMIT then UPDATE", "COMMIT; UPDATE canary SET v = 'escaped' WHERE id = 1"],
+      ["COMMIT then DROP", "COMMIT; DROP TABLE canary"],
+      ["END then INSERT", "END; INSERT INTO canary VALUES (88, 'escaped')"],
+      ["ROLLBACK then DDL", "ROLLBACK; CREATE TABLE evil3 (id int)"],
+      [
+        "SET TRANSACTION READ WRITE then write",
+        "SET TRANSACTION READ WRITE; INSERT INTO canary VALUES (87, 'escaped')",
+      ],
+      [
+        "trailing semicolon and newlines",
+        "COMMIT;\n  INSERT INTO canary VALUES (86, 'escaped');\n",
+      ],
+      [
+        "a read first, so the script looks harmless",
+        "SELECT 1; COMMIT; INSERT INTO canary VALUES (85, 'escaped')",
+      ],
+    ];
+
+    for (const [label, sql] of escapes) {
+      it(`refuses to escape the read-only transaction via ${label}`, async () => {
+        const result = await run(sql);
+        expect(result.isError, `${label} should have been refused`).toBe(true);
+
+        // And nothing was written. This is the assertion that matters: an
+        // error message is easy, an unchanged database is the property.
+        const row = await db.query("SELECT v FROM canary WHERE id = 1");
+        expect(row.rows[0]?.["v"], `${label} modified row 1`).toBe("original");
+
+        const count = await db.query("SELECT count(*)::int AS n FROM canary");
+        expect(count.rows[0]?.["n"], `${label} inserted a row`).toBe(1);
+
+        const evil = await db.query(
+          `SELECT count(*)::int AS n FROM information_schema.tables
+            WHERE table_name = 'evil3'`,
+        );
+        expect(evil.rows[0]?.["n"], `${label} created a table`).toBe(0);
+      });
+    }
+
+    it("still runs a single statement containing a semicolon in a literal", async () => {
+      // The multi-statement heuristic is only a message-picker, so a false
+      // positive must not become a refusal. Postgres decides.
+      const result = await run("SELECT 'a;b' AS given");
+      expect(result.isError, textOf(result)).toBeFalsy();
+      expect(textOf(result)).toContain("a;b");
+    });
+
+    it("leaves the database unchanged after every refused write", async () => {
+      // The assertion that actually matters: not just that we returned an
+      // error, but that nothing was written.
+      const check = await db.query("SELECT v FROM canary WHERE id = 1");
+      expect(check.rows[0]?.["v"]).toBe("original");
+
+      const rows = await db.query("SELECT count(*)::int AS n FROM canary");
+      expect(rows.rows[0]?.["n"]).toBe(1);
+
+      const tables = await db.query(
+        `SELECT count(*)::int AS n FROM information_schema.tables
+          WHERE table_name IN ('evil', 'evil2')`,
+      );
+      expect(tables.rows[0]?.["n"], "no table should have been created").toBe(0);
+    });
+
+    it("binds parameters rather than interpolating them", async () => {
+      // The classic injection payload as a *value* must stay a value.
+      const result = await executeSql(db, false, {
+        query: "SELECT $1::text AS given",
+        params: ["'; DROP TABLE canary; --"],
+        limit: 10,
+        response_format: "json",
+      });
+      expect(result.isError).toBeFalsy();
+      const still = await db.query("SELECT count(*)::int AS n FROM canary");
+      expect(still.rows[0]?.["n"]).toBe(1);
+    });
+
+    it("reports a syntax error without leaking internals", async () => {
+      const result = await run("SELECT FROM WHERE");
+      expect(result.isError).toBe(true);
+      // A SQLSTATE is what lets an agent tell a syntax error from a
+      // permission error.
+      expect(textOf(result)).toMatch(/SQLSTATE|syntax/i);
+    });
+  });
+
+  describe(`writes enabled (${backend.name})`, () => {
+    let db: SqlExecutor;
+
+    beforeAll(async () => {
+      db = await backend.create();
+      await db.query("DROP TABLE IF EXISTS writable CASCADE");
+      await db.query("CREATE TABLE writable (id int PRIMARY KEY, v text)");
+    });
+
+    afterAll(async () => {
+      await db?.close();
+    });
+
+    it("permits a write when the operator has enabled it", async () => {
+      const result = await executeSql(db, true, {
+        query: "INSERT INTO writable VALUES (1, 'ok') RETURNING id",
+        params: [],
+        limit: 10,
+        response_format: "markdown",
+      });
+      expect(result.isError).toBeFalsy();
+
+      const check = await db.query("SELECT v FROM writable WHERE id = 1");
+      expect(check.rows[0]?.["v"]).toBe("ok");
+    });
+
+    it("rolls back a failed multi-statement write", async () => {
+      // Partial application is the failure mode to avoid.
+      const before = await db.query("SELECT count(*)::int AS n FROM writable");
+      const result = await executeSql(db, true, {
+        query:
+          "INSERT INTO writable VALUES (50, 'a'); INSERT INTO writable VALUES (50, 'duplicate')",
+        params: [],
+        limit: 10,
+        response_format: "markdown",
+      });
+      expect(result.isError).toBe(true);
+
+      const after = await db.query("SELECT count(*)::int AS n FROM writable");
+      expect(
+        after.rows[0]?.["n"],
+        "a failed statement batch must leave no rows behind",
+      ).toBe(before.rows[0]?.["n"]);
+    });
+  });
+}

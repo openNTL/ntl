@@ -2,22 +2,24 @@
 resolver = "2"
 members = [
     "runtime/ntl-core",
+    "runtime/ntl-store-sqlite",
+    "runtime/ntl-store-postgres",
+    "runtime/ntl-net",
     "runtime/ntl-cli",
     "runtime/ntl-node",
     "runtime/ntl-edge",
     "adapters/web2",
     "adapters/web3",
     "adapters/legacy",
-    "examples/kv-store",
-    "examples/echo-node",
+    "examples/two-node-learning",
     "benchmarks",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0-beta.1"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/nyuchi-ntl/ntl"
+repository = "https://github.com/openNTL/ntl"
 homepage = "https://openntl.org"
 authors = ["The Bundu Foundation <dev@openntl.org>"]
 rust-version = "1.85"
@@ -33,7 +35,7 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
-ulid = "1"
+ulid = { version = "1", features = ["serde"] }
 
 # Crypto
 blake3 = "1"
@@ -43,7 +45,9 @@ aes-gcm = "0.10"
 ed25519-dalek = "2"
 x25519-dalek = "2"
 rand = "0.8"
+rand_chacha = "0.3"
 toml = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Networking
 quinn = "0.11"          # QUIC implementation
@@ -68,10 +72,64 @@ tempfile = "3"
 
 # Internal
 ntl-core = { path = "runtime/ntl-core" }
+ntl-store-sqlite = { path = "runtime/ntl-store-sqlite" }
+ntl-store-postgres = { path = "runtime/ntl-store-postgres" }
+ntl-net = { path = "runtime/ntl-net" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
+# priority = -1 so the specific allows below take precedence over the groups.
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# `pedantic` is kept on because it catches real problems — it flagged the dead
+# `|| true` in the Targeted propagation filter. These specific lints are
+# allowed because they fire constantly on code that is correct as written, and
+# a warning an author learns to scroll past protects nothing.
+#
+# Each entry is a deliberate decision, not a convenience.
+
+# Weights, scores, and rewards are f32 throughout, and timestamps are u64.
+# Converting between them is the arithmetic this protocol is made of. The
+# precision loss is real and bounded: a weight carries three or four
+# significant figures, and nanosecond timestamps lose sub-microsecond detail
+# in decay maths where hours are the unit that matters.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+
+# Exact float comparison is the assertion in tests that pin a specific
+# computed weight, and in code that checks whether an update was a no-op.
+# Where a tolerance is appropriate the tests use one explicitly.
+float_cmp = "allow"
+
+# `.map(|b| format!("{b:02x}")).collect()` is the idiomatic way to render a
+# node identifier as hex. The suggested alternative is longer and no clearer.
+format_collect = "allow"
+
+# `AdapterCapabilities` is a set of independent capability flags. Packing them
+# into an enum or bitfield would obscure what is being declared.
+struct_excessive_bools = "allow"
+
+# Enumerating every variant of a protocol enum, even where two currently share
+# a body, documents the full set and makes an added variant a compile error
+# rather than a silent fallthrough.
+match_same_arms = "allow"
+
+# Trait methods take owned values where the trait contract is to consume them,
+# and test helpers mirror the signatures they exercise.
+needless_pass_by_value = "allow"
+
+# Test modules declare helper items next to the tests that use them, which
+# reads better than hoisting every fixture to the top.
+items_after_statements = "allow"
+
+# Some functions in the runtime read as one sequence and would be harder to
+# follow split apart for their own sake.
+too_many_lines = "allow"
+
+# Doc comments reference protocol terms (synapse, receipt, potential) that are
+# prose, not code identifiers.
+doc_markdown = "allow"

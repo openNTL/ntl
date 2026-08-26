@@ -1,0 +1,48 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "ntl-postgres-mcp-server"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# postgres.js needs Node built-ins (net, crypto, stream) and Workers' TCP
+# socket support. Without this the driver fails to resolve `node:net` at build
+# time rather than at runtime, which at least fails loudly.
+compatibility_flags = ["nodejs_compat"]
+
+# The reference schema is imported as text, so there is one source of truth
+# rather than a generated .ts copy that could drift. Wrangler's default rules
+# already treat **/*.sql as Text, so no explicit rule is needed — adding one
+# shadows the default and makes Wrangler warn about it.
+
+[observability]
+enabled = true
+
+# ---------------------------------------------------------------------------
+# Hyperdrive pools connections outside the isolate. Without it, every Worker
+# invocation opens its own Postgres connection, and a burst of traffic
+# exhausts max_connections long before it exhausts anything else.
+#
+#   wrangler hyperdrive create ntl-postgres --connection-string="postgres://..."
+#
+# Then paste the id below and redeploy.
+# ---------------------------------------------------------------------------
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "<your-hyperdrive-id>"
+
+[vars]
+# Writes are off by default. An MCP server holding database credentials should
+# not be able to mutate anything unless an operator said so.
+ALLOW_WRITES = "false"
+NTL_SCHEMA = "ntl"
+
+# Secrets are never in this file:
+#   wrangler secret put MCP_AUTH_TOKEN
+#   wrangler secret put DATABASE_URL   # only if not using Hyperdrive
+
+[env.production]
+vars = { ALLOW_WRITES = "false", NTL_SCHEMA = "ntl" }
+
+# A separate environment for the writable deployment, so enabling writes is a
+# deliberate act against a named target rather than a variable flip on prod.
+[env.admin]
+vars = { ALLOW_WRITES = "true", NTL_SCHEMA = "ntl" }

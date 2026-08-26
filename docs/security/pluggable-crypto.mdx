@@ -1,6 +1,6 @@
 ---
 title: "Pluggable Cryptography"
-description: "How NTL treats cryptography as a swappable module"
+description: "NTL treats cryptography as a swappable module rather than a baked-in choice, so a node can adopt a new algorithm without a protocol change."
 "og:title": "Pluggable Cryptography — NTL Security"
 "og:description": "NTL's approach to cryptographic agility — cryptography as a swappable module, not a hardcoded foundation."
 "twitter:title": "NTL Pluggable Cryptography"
@@ -67,21 +67,40 @@ NTL ships with a default `PostQuantumModule` that uses:
 
 These are the current NIST Post-Quantum Cryptography standards. When they're superseded, a new module is published — the protocol doesn't change.
 
+<Warning>
+  `pq-v1` is **specified but not implemented**. The only module the reference
+  implementation provides today is `classical-v1` — Ed25519 signatures, X25519
+  key agreement, BLAKE3 hashing. See
+  [spec/crypto-interface](/spec/crypto-interface) for the full status table.
+
+  A node configured for a module this build cannot provide **fails to start**,
+  naming the modules it does support. It does not silently fall back: an
+  operator who asked for post-quantum signing and got Ed25519 has been told the
+  opposite of the truth about their deployment's confidentiality horizon.
+</Warning>
+
 ## Swapping Modules
 
+`crypto_module` is a top-level field, not a `[crypto]` table:
+
 ```toml
-[crypto]
-module = "post-quantum"  # Default
-# module = "classical"   # RSA/ECDSA for legacy compatibility
-# module = "hybrid"      # PQ + classical for transition period
-# module = "custom"      # Your implementation
+crypto_module = "classical-v1"   # the only module implemented today
+# crypto_module = "pq-v1"        # specified; not yet available
+# crypto_module = "hybrid-v1"    # specified; not yet available
 ```
 
-Nodes can negotiate crypto modules during synapse handshake. If two nodes support different modules, they fall back to the highest common module or refuse the synapse.
+Nodes negotiate crypto modules during the synapse handshake. If two nodes
+support different modules they fall back to the highest common module, or
+refuse the synapse.
 
 ## Hybrid Mode
 
-During the transition period (now), NTL supports a **hybrid mode** that signs and encrypts with both classical and post-quantum algorithms. This provides backward compatibility with systems that don't yet support PQ crypto while maintaining quantum resistance.
+<Note>
+  Design, not shipped. `hybrid-v1` is specified; no implementation provides it
+  yet.
+</Note>
+
+The intent is that during the transition period a **hybrid mode** signs and encrypts with both classical and post-quantum algorithms. This provides backward compatibility with systems that don't yet support PQ crypto while maintaining quantum resistance.
 
 ```rust
 // Hybrid signature: valid if EITHER scheme verifies

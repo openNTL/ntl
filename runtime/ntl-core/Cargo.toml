@@ -9,41 +9,48 @@ homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+# `ntl-core` is pure Rust and makes no runtime assumptions: no async
+# executor, no transport, no ambient clock or randomness. That is what keeps
+# it buildable for wasm32-unknown-unknown and its time-dependent logic
+# deterministically testable. Networking belongs to the node binaries;
+# persistence belongs behind the `NodeStore` trait.
 [dependencies]
-tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_cbor.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
 tracing.workspace = true
 bytes.workspace = true
-ulid.workspace = true
 blake3.workspace = true
-rand.workspace = true
-toml = "0.8"
+toml.workspace = true
 
-# Post-quantum crypto (optional, default enabled)
+# default-features = false drops ulid's `rand` dependency, whose `getrandom`
+# backend does not build for wasm32-unknown-unknown. Identifiers are built
+# via `Ulid::from_parts` from an injected clock and RNG instead.
+#
+# ulid's own `serde` feature is also off: it requires `std` (which re-enables
+# `rand`), and it encodes as a 26-character string. `SignalId` implements
+# serde by hand over the 16 raw bytes the wire format specifies.
+ulid = { version = "1", default-features = false }
+
+# Concrete crypto backends are optional. The post-quantum ones bind to C and
+# cannot build for wasm32; the wasm check therefore runs with
+# --no-default-features.
 pqcrypto-dilithium = { workspace = true, optional = true }
 pqcrypto-kyber = { workspace = true, optional = true }
-aes-gcm.workspace = true
-
-# Classical crypto (optional)
 ed25519-dalek = { workspace = true, optional = true }
 x25519-dalek = { workspace = true, optional = true }
-
-# Networking
-quinn.workspace = true
-rustls.workspace = true
-rcgen.workspace = true
+aes-gcm = { workspace = true, optional = true }
 
 [features]
 default = ["pq-crypto", "classical-crypto"]
-pq-crypto = ["dep:pqcrypto-dilithium", "dep:pqcrypto-kyber"]
-classical-crypto = ["dep:ed25519-dalek", "dep:x25519-dalek"]
+pq-crypto = ["dep:pqcrypto-dilithium", "dep:pqcrypto-kyber", "dep:aes-gcm"]
+classical-crypto = ["dep:ed25519-dalek", "dep:x25519-dalek", "dep:aes-gcm"]
 hybrid-crypto = ["pq-crypto", "classical-crypto"]
 
 [dev-dependencies]
 proptest.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 ---
 title: "Propagation"
-description: "How signals move through the NTL network"
+description: "How signals move through an NTL network: flood, weighted, targeted and gradient scopes, path scoring, attenuation and loop prevention."
 "og:title": "Propagation — NTL Core Concepts"
 "og:description": "How signals route through the NTL network via emergent propagation based on relevance, weight, and activation patterns."
 "twitter:title": "NTL Propagation"
@@ -128,9 +128,10 @@ fn receive(&mut self, signal: Signal) {
 
 The seen-signal cache is time-bounded (signals older than the max TTL window are evicted).
 
-## SiafuDB Interaction
+## Storage Interaction
 
-During propagation, signals can optionally **deposit** state into SiafuDB:
+During propagation, signals can optionally **deposit** state into the node's
+[storage backend](/guides/storage-backends):
 
 - **Data signals** can write their payload to the local graph store
 - **Event signals** can create graph edges representing state transitions

@@ -1,6 +1,6 @@
 ---
 title: "API Reference Overview"
-description: "Rust API reference for the NTL runtime"
+description: "Rust API reference for the NTL runtime: the ntl-core, ntl-net and storage crates, and which types you need to embed a node in an application."
 mode: "wide"
 "og:title": "NTL API Reference — Rust Runtime API"
 "og:description": "Public Rust API documentation for the NTL runtime library, covering nodes, signals, synapses, and adapters."
@@ -23,7 +23,7 @@ ntl
 ├── ntl::activation    // Activation model and functions
 ├── ntl::crypto        // Pluggable cryptographic modules
 ├── ntl::adapter       // Adapter trait and built-in adapters
-├── ntl::siafu         // SiafuDB integration
+├── ntl::store         // Pluggable storage backends
 ├── ntl::config        // Configuration loading
 └── ntl::testing       // Test utilities and mocks
 ```
@@ -37,7 +37,7 @@ use ntl::Node;
 
 let node = Node::builder()
     .with_config_file("config.toml")
-    .with_crypto_module("pq-v1")
+    .with_crypto_module("classical-v1")
     .build()
     .await?;
 ```

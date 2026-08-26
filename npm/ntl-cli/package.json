@@ -1,0 +1,47 @@
+{
+  "name": "@bundu/ntl-cli",
+  "version": "0.2.0-beta.1",
+  "description": "openNTL command-line interface \u2014 signal transport that learns its routes",
+  "keywords": [
+    "ntl",
+    "openntl",
+    "p2p",
+    "mesh-network",
+    "learned-routing",
+    "signal-transport"
+  ],
+  "homepage": "https://openntl.org",
+  "bugs": "https://github.com/openNTL/ntl/issues",
+  "license": "Apache-2.0",
+  "author": "The Bundu Foundation <dev@openntl.org>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openNTL/ntl.git",
+    "directory": "npm/ntl-cli"
+  },
+  "type": "module",
+  "bin": {
+    "ntl": "bin/ntl.mjs"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

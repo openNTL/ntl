@@ -1,0 +1,4 @@
+# Defaults, stated explicitly so `cargo fmt --check` in CI is reproducible
+# across toolchain versions.
+edition = "2024"
+max_width = 100

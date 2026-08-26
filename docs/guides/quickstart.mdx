@@ -1,157 +1,237 @@
 ---
 title: "Quickstart"
-description: "Get started with NTL in 5 minutes"
-"og:title": "NTL Quickstart — Get Started in 5 Minutes"
-"og:description": "Install the NTL runtime, spin up a node, and emit your first signal in under 5 minutes."
+description: "Install the openNTL CLI, start two nodes on loopback, emit a signed signal, and watch a synapse weight change from a real delivery receipt."
+"og:title": "NTL Quickstart — Two Nodes in Five Minutes"
+"og:description": "Build the NTL CLI, initialize a node, exchange an acknowledged signal between two local nodes, and see the routing weight change."
 "twitter:title": "NTL Quickstart"
 ---
-Get an NTL node running and emit your first signal.
+
+Get two nodes talking on your machine, and watch the routing model change in
+response to what happens.
 
 <Note>
-NTL is in active development. The API and CLI are subject to change.
+NTL is in active development. Everything below is real and runs today, but the
+CLI and API are not yet stable.
 </Note>
 
 ## Prerequisites
 
-- Rust 1.75+ ([install](https://rustup.rs))
+- Node 18+ (for the npm install) **or** Rust 1.85+ ([install](https://rustup.rs))
 - A terminal
 
 ## Install
 
 ```bash
-# Install the NTL CLI
-cargo install ntl-cli
-
-# Verify installation
+npm install -g @bundu/ntl-cli
 ntl --version
+```
+
+The CLI is a Rust binary; npm is just the distribution channel, because it is
+the package manager almost everyone already has. The postinstall step downloads
+the binary for your platform and verifies its SHA-256 checksum.
+
+Prefer Rust, or on a platform without a prebuilt binary:
+
+```bash
+cargo install --git https://github.com/openNTL/ntl ntl-cli
 ```
 
 ## Initialize a Node
 
 ```bash
-# Create a new node with default configuration
 ntl init
-
-# This creates:
-# - ~/.ntl/config.toml    (node configuration)
-# - ~/.ntl/identity.key   (node keypair)
-# - ~/.ntl/state/         (local state directory)
 ```
 
-## Start the Node
+This creates, under `~/.ntl` (override with `--home` or `$NTL_HOME`):
 
-```bash
-# Start in development mode (connects to test network)
-ntl start --dev
+| Path | What it is |
+|---|---|
+| `config.toml` | Node configuration, with edge-class defaults |
+| `node.db` | SQLite store — identity, synapses, journal, dedup cache |
 
-# You should see:
-# ✓ Node identity: ntl:8f3a...c721
-# ✓ Crypto module: post-quantum (CRYSTALS-Dilithium)
-# ✓ Connected to bootstrap: ntl://testnet.openntl.org:4433
-# ✓ Synapses formed: 3
-# ✓ Node ready. Listening for signals.
+Output:
+
+```text
+✓ node initialized
+  home      /home/you/.ntl
+  config    /home/you/.ntl/config.toml
+  store     /home/you/.ntl/node.db (sqlite)
+  class     edge
+  identity  843d9ad69b4f
+
+Next: ntl start --dev
 ```
 
-## Emit Your First Signal
+The identity is a keypair derived from a seed in the store. It **persists** —
+a node that regenerated its identity on each start would lose every synapse
+it had formed and relearn its routing from scratch every restart.
 
-Open a second terminal:
+Pick a different deployment class with `--class edge | full-node |
+high-traffic`. The class sets learning rate, queue depth, refractory period,
+and fanout together, so the combination stays coherent.
+
+## Two Nodes, One Signal
+
+NTL is peer-to-peer with no broker, so the smallest interesting network is
+two nodes. Use two terminals.
+
+**Terminal 1 — the receiver:**
 
 ```bash
-# Emit a data signal
-ntl emit --type data --payload '{"hello": "world"}' --weight 0.5
-
-# Output:
-# ✓ Signal emitted: 01HYX3K...
-# ✓ Type: Data
-# ✓ Weight: 0.5
-# ✓ TTL: 10
-# ✓ Propagated to 3 synapses
+export NTL_HOME=~/.ntl-b
+ntl init
+ntl listen --listen 127.0.0.1:14433
 ```
 
-## Listen for Signals
+**Terminal 2 — the sender:**
 
 ```bash
-# Listen for all incoming signals
-ntl listen
-
-# Or filter by type
-ntl listen --type event
-
-# Output (streaming):
-# [2026-04-13T10:00:01Z] Signal 01HYX3M... | Type: Data | Weight: 0.42 | From: ntl:a1b2...
-# [2026-04-13T10:00:03Z] Signal 01HYX3P... | Type: Event | Weight: 0.38 | From: ntl:c3d4...
+ntl emit --type data --payload '{"hello":"world"}' \
+         --acknowledged --peer 127.0.0.1:14433
 ```
 
-## Inspect Node State
+The sender prints:
+
+```text
+→ emitted 01M0QEC1F14QY9DTFH2BQQEJJK (data, weight 0.5)
++ peer connected ntl:daef80390ccfa3f4...
+→ forwarded 01M0QEC1F14QY9DTFH2BQQEJJK to 1 peer(s)
+✓ receipt delivered weight +0.0322
+```
+
+And the receiver:
+
+```text
+← 01M0QEC1F14QY9DTFH2BQQEJJK Data weight 0.450 from ntl:843d9ad69b4f...
+  {"hello":"world"}
+```
+
+Three things in that exchange are worth pausing on.
+
+**`weight 0.450`, not `0.500`.** The signal was attenuated by the synapse it
+crossed (`0.5 × 0.9`). Weight decays with distance, which is what stops a
+flood from travelling forever.
+
+**`--acknowledged`.** Without it the signal is `best-effort`: it may be
+absorbed silently and the sender never learns. With it, the sender is
+guaranteed an outcome — a receipt or a timeout, never silence. Use it for
+anything with a side effect. See
+[delivery-semantics](/spec/delivery-semantics).
+
+**`weight +0.0322`.** That is the routing model updating. The receipt came
+back, resolved the journalled routing decision, and strengthened the synapse
+that carried it. Emit again and it rises again — bounded by the total weight
+budget and the per-peer influence cap.
+
+## Watch the Model
 
 ```bash
-# View active synapses
 ntl synapses
-
-# Output:
-# ID          Remote Node       Weight  State   Signals  Latency
-# syn:001     ntl:a1b2...c3d4   0.45   Active  142      12ms
-# syn:002     ntl:e5f6...g7h8   0.32   Active  87       28ms
-# syn:003     ntl:i9j0...k1l2   0.12   Active  23       45ms
-
-# View node health
-ntl status
-
-# View local topology
-ntl topology
 ```
 
-## Programmatic Usage
+```text
+PEER             WEIGHT      STATE SENT/RECV     ERR  AFFINITY
+daef80390ccf     0.1322     active 1/0          0.00  Data:1
 
-Add NTL to your Rust project:
+total outbound weight 0.1322 of 8.0 budget
+```
+
+`WEIGHT` is learned, not configured. `AFFINITY` is learned per signal type,
+so a peer can become preferred for `Query` while staying unremarkable for
+`Command`.
 
 ```bash
-cargo add ntl
+ntl status
 ```
 
-```rust
-use ntl::{Node, Signal, SignalType};
-
-#[tokio::main]
-async fn main() -> Result<(), ntl::Error> {
-    // Initialize node
-    let node = Node::builder()
-        .with_config_file("~/.ntl/config.toml")
-        .build()
-        .await?;
-
-    // Emit a signal
-    let signal = Signal::data("greeting")
-        .with_payload(serde_json::json!({"hello": "world"}))
-        .with_weight(0.5)
-        .emit(&node)
-        .await?;
-
-    println!("Signal emitted: {}", signal.id);
-
-    // Listen for signals
-    let mut listener = node.listen(SignalType::Data).await?;
-    while let Some(signal) = listener.next().await {
-        println!("Received: {:?}", signal.payload);
-    }
-
-    Ok(())
-}
+```text
+routing model
+  decisions   3 sampled
+  delivered   66.7%
+  exploration 0.0%
+  pending     33.3%
 ```
 
-## Next Steps
+Those last two lines are the model's health check:
+
+- **exploration near zero** — the node has stopped trying alternatives, so it
+  can no longer discover a better path. (With only one eligible synapse there
+  is nothing to explore, and `ntl status` will not warn.)
+- **pending near 100%** — no receipts are arriving, so the weights reflect
+  nothing. Usually it means peers are emitting `best-effort` traffic only.
+
+## See It Learn
+
+The two-node exchange above moves a weight once. To see the model actually
+separate a good peer from a bad one:
+
+```bash
+cargo run -p ntl-example-two-node-learning
+```
+
+```text
+Phase 1 — both peers deliver. Both weights rise.
+  round     peer A     peer B  chosen
+      1     0.1450     0.1450  A B*
+     12     0.6400     0.6400  B* A
+
+Phase 2 — peer B starts refusing every signal.
+  round     peer A     peer B  chosen
+      1     0.6850     0.6175  A B✗*
+     12     1.0000     0.3700  A B✗*
+
+  The refusing peer lost weight; the delivering peer kept it.
+  Nothing configured that. The only input was the receipts.
+```
+
+The `*` marks an exploratory choice. Note that peer B keeps being tried even
+after it starts failing — that is deliberate, and it is what lets B recover
+if it starts working again. A router that stopped probing a failing path
+could never notice it had recovered.
+
+The demo advances a simulated clock by an hour per round, because a
+per-identity influence cap bounds how much one peer can move a weight inside
+one window. Learning is rate-limited on purpose; see
+[learning-model](/spec/learning-model) §2.4.
+
+## Running a Long-Lived Node
+
+```bash
+ntl start --dev
+```
+
+`--dev` binds loopback only, so a development node is not reachable from the
+network by accident. For a real deployment use `ntl start --listen
+0.0.0.0:4433 --peer <addr>`, or the `ntl-node` / `ntl-edge` binaries, which
+read `$NTL_HOME`, `$NTL_LISTEN`, and `$NTL_PEERS`.
+
+## What Is Not Built Yet
+
+Being explicit, so you do not go looking:
+
+| Not yet | Notes |
+|---|---|
+| Public test network | No bootstrap nodes are running. Connect nodes you control. |
+| Rust crates on crates.io | Install via npm or `cargo install --git`. |
+| Post-quantum crypto | The interface is specified and pluggable; the shipping module is Ed25519. See [crypto-interface](/spec/crypto-interface). |
+| QUIC transport | Currently TCP with length-prefixed CBOR frames. |
+| PostgreSQL backend | Trait and config are defined; use SQLite. See [storage backends](/guides/storage-backends). |
+| Payload encryption | Signals are signed, not encrypted. |
+| Adapters | Web2, Web3, and legacy adapter crates are stubs. |
+
+## Next
 
 <CardGroup cols={2}>
-  <Card title="Core Concepts" icon="brain" href="/concepts/signals">
-    Understand signals, synapses, and propagation
+  <Card title="Your First Signal" icon="wave-square" href="/guides/first-signal">
+    Signal types, weights, scopes, and tags in depth
   </Card>
-  <Card title="Your First Signal Handler" icon="code" href="/guides/first-signal">
-    Build an application that processes signals
+  <Card title="Storage Backends" icon="database" href="/guides/storage-backends">
+    SQLite, Postgres, graph, and KV backends
   </Card>
-  <Card title="Adapters" icon="plug" href="/adapters/overview">
-    Connect existing systems to NTL
+  <Card title="Learning Model" icon="brain" href="/spec/learning-model">
+    How weights are actually updated
   </Card>
-  <Card title="Specification" icon="file-lines" href="/spec/overview">
-    Read the formal protocol spec
+  <Card title="Threat Model" icon="shield-halved" href="/spec/threat-model">
+    What NTL defends against, and what it does not
   </Card>
 </CardGroup>

@@ -1,11 +1,11 @@
 ---
 title: "Crypto Interface"
-description: "Specification for the pluggable cryptographic module"
+description: "Normative specification for NTL's pluggable cryptographic module: required operations, module negotiation, and which modules exist today."
 "og:title": "Crypto Interface — NTL Specification"
 "og:description": "Formal specification for NTL's pluggable cryptographic module, enabling algorithm-agile security."
 "twitter:title": "NTL Crypto Interface Spec"
 ---
-**Version:** 0.1.0-draft
+**Version:** beta_0.0.0
 
 ## Overview
 
@@ -48,20 +48,32 @@ Priority order for module selection:
 2. Highest-versioned mutually supported module
 3. Failure (no common module)
 
-## Required Modules
+## Modules
 
-Implementations MUST include at minimum:
+| Module ID | Algorithms | Status | In the reference implementation |
+|---|---|---|---|
+| `classical-v1` | Ed25519 + X25519 + AES-256-GCM + BLAKE3 | REQUIRED | **Yes** — signing and verification |
+| `pq-v1` | Dilithium + Kyber + AES-256-GCM + BLAKE3 | RECOMMENDED | No |
+| `hybrid-v1` | Both PQ and classical (dual signatures) | OPTIONAL | No |
 
-| Module ID | Algorithms | Status |
-|---|---|---|
-| `pq-v1` | Dilithium + Kyber + AES-256-GCM + BLAKE3 | Default |
-| `classical-v1` | Ed25519 + X25519 + AES-256-GCM + BLAKE3 | Legacy compatibility |
+An implementation MUST provide `classical-v1` — it is the floor that makes two
+arbitrary nodes able to negotiate anything at all.
 
-Implementations SHOULD include:
+<Warning>
+`pq-v1` is specified but **not implemented** in the reference implementation,
+and 0.1.0-draft was wrong to call it the default. A node whose configuration
+names an unimplemented module MUST fail to start with an error naming the
+modules it does support. It MUST NOT fall back to a different module silently:
+an operator who asked for post-quantum signing and got Ed25519 has been told
+the opposite of the truth about their deployment's confidentiality horizon.
 
-| Module ID | Algorithms | Status |
-|---|---|---|
-| `hybrid-v1` | Both PQ and classical (dual signatures) | Transition period |
+The reference implementation enforces this in `NodeConfig::validate`, and
+`crypto::supported_modules()` is the single list it checks against.
+</Warning>
+
+The point of this interface is that the choice is not baked into the protocol —
+not that any particular module already exists. Post-quantum readiness means a
+node can adopt `pq-v1` without a wire-format change, which holds today.
 
 ## Key Serialization
 

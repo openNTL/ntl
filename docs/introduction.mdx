@@ -1,8 +1,8 @@
 ---
 title: "Neural Transfer Layer"
-description: "The Neural Transfer Layer for Modern Compute"
+description: "openNTL is an open protocol that replaces request-response APIs with signal propagation across a weighted graph that learns its own routes."
 mode: "wide"
-"og:title": "Neural Transfer Layer — Neural Data Transfer for AI, Web3, and Quantum Computing"
+"og:title": "Neural Transfer Layer — An Open Signal Transport Protocol"
 "og:description": "NTL is an open source data transfer layer that replaces the request-response paradigm with neural signal propagation. Built for the age of AI, Web3, and quantum computing."
 "twitter:title": "Neural Transfer Layer"
 ---
@@ -35,22 +35,32 @@ NTL is a neural transfer layer — a fundamentally new approach to moving data b
 ## Where NTL Sits in the Stack
 
 ```text
-┌─────────────────────────────────┐
-│         Applications            │
-│      (Mukoko, dApps, AI)        │
-├─────────────────────────────────┤
-│     Neural Transfer Layer       │  ← You are here
-│    (Neural Signal Transport)    │
-├─────────────────────────────────┤
-│          SiafuDB                │
-│   (Swarm-based Graph Storage)   │
-├─────────────────────────────────┤
-│     Network / Hardware          │
-│   (TCP/UDP/QUIC substrate)      │
-└─────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                  Applications                     │
+│               (Mukoko, dApps, AI)                 │
+├───────────────────────────────────────────────────┤
+│             Neural Transfer Layer                 │  ← You are here
+│              (Signal Transport)                   │
+├───────────────────────────────────────────────────┤
+│                 Storage Layer                     │
+│   pluggable: SQLite │ Postgres │ graph DB │ KV    │
+├───────────────────────────────────────────────────┤
+│               Network / Hardware                  │
+│              (TCP/UDP/QUIC substrate)             │
+└───────────────────────────────────────────────────┘
 ```
 
-NTL pairs with [SiafuDB](https://siafudb.org) to form a complete nervous system — NTL moves signals, SiafuDB remembers them. Together they replace the traditional API \+ database architecture with something native to AI, decentralized, and quantum-ready.
+**NTL moves signals; your storage layer remembers them.**
+
+Storage is an interface, not a dependency. A node persists its synapse
+weights, topology knowledge, and learning journal through the
+[storage interface](/spec/storage-interface) — and any database that
+satisfies that contract will do. The default is SQLite: one file, no
+configuration, and it runs on a phone.
+
+That is deliberate. NTL is only useful if you can run it on infrastructure
+you already trust, so nothing in the protocol privileges a particular
+database. See [storage backends](/guides/storage-backends).
 
 ## Quick Start
 
@@ -74,18 +84,29 @@ NTL pairs with [SiafuDB](https://siafudb.org) to form a complete nervous system 
 
 ## Built by The Bundu Foundation
 
-NTL is stewarded by [The Bundu Foundation](https://www.bundu.org), an open source foundation building infrastructure for African markets and beyond.
+NTL is a core technical project of
+[The Bundu Foundation](https://www.bundu.org), an open source foundation
+building infrastructure for African markets and beyond. The Foundation lists
+it at [bundu.org/projects](https://www.bundu.org/projects/) as
+*"signal-based data transfer for decentralised networks — replaces APIs with
+neural propagation."*
 
-**Official Maintainers:**
-- **The Bundu Foundation** — Owner and steward of NTL and SiafuDB
+**Maintainers:**
+- **The Bundu Foundation** — Owner and steward
 - **Nyuchi Web Services** — Engineering and reference implementation
-- **Nyuchi Africa** — Core maintainer and contributor
-- **Mukoko Africa** — Core maintainer and contributor
+- **Nyuchi Africa** — Core maintainer
+- **Mukoko Africa** — Core maintainer
 
-**Ecosystem:**
-- **SiafuDB** — Companion storage layer
-- **Mukoko** — Application platform built on NTL \+ SiafuDB
+**Sibling Foundation projects.** NTL depends on none of these; the
+Foundation's projects are designed to compose, not to require one another.
+
+| Project | Relationship to NTL |
+|---|---|
+| SiafuDB, SiafuDB-Kuzu | Graph storage backend options |
+| Nyuchi Honeycomb | Decentralized Web3 storage network |
+| Harare Metro, Mzizi | Candidate applications |
+| Mukoko | Application platform built on NTL |
 
 ## License
 
-NTL is open source under the [Apache 2.0 License](https://github.com/nyuchi-ntl/ntl/blob/main/LICENSE).
+NTL is open source under the [Apache 2.0 License](https://github.com/openNTL/ntl/blob/main/LICENSE).

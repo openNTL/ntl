@@ -1,0 +1,20 @@
+[package]
+name = "ntl-example-two-node-learning"
+description = "Two local NTL nodes where repeated signals visibly strengthen a synapse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "two-node-learning"
+path = "src/main.rs"
+
+[dependencies]
+ntl-core.workspace = true
+ntl-net.workspace = true
+tokio = { workspace = true }
+serde_json.workspace = true
+
+[lints]
+workspace = true

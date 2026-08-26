@@ -1,0 +1,364 @@
+---
+title: "Learning Model"
+description: "Normative specification for NTL's online routing model — the reward signal, Hebbian update, weight decay, exploration and influence caps."
+"og:title": "Learning Model — NTL Specification"
+"og:description": "How NTL routing weights are updated from delivery outcomes: reward signals, Hebbian update rule, decay, and exploration sampling."
+"twitter:title": "NTL Learning Model Spec"
+---
+**Version:** beta_0.0.0
+
+## Overview
+
+NTL claims that routing improves with use. This document defines the
+mechanism, so that the claim is checkable rather than rhetorical.
+
+The model is a **contextual bandit over synapses**, trained online from
+delivery outcomes. Each node independently learns which of its synapses
+carry which signal types successfully. There is no global model, no training
+phase, and no coordination: a node's weights are local state, updated from
+evidence it observed itself.
+
+<Note>
+Scale check: a node with 100 synapses and 8 signal types holds fewer than a
+thousand parameters. This is deliberately small. The model must fit and
+train on a phone, and be auditable by an operator reading a table.
+</Note>
+
+## 1. The Reward Signal
+
+Before this version, NTL had no reward signal. Propagation was fire and
+forget, so "delivery success versus intent" was uncomputable: a signal that
+vanished was indistinguishable from one that arrived. **A model cannot learn
+from an outcome it never observes.** This section closes that gap.
+
+### 1.1 The Receipt Signal Type
+
+Conforming implementations MUST support the `Receipt` signal type.
+
+```
+Receipt {
+    signal_type:    Receipt,
+    correlation_id: SignalId,   // REQUIRED — the signal being acknowledged
+    payload: {
+        status:     "delivered" | "rejected",
+        hops:       uint16,     // hops taken to reach the handler
+        reason:     string?,    // REQUIRED when status = "rejected"
+    },
+}
+```
+
+Rules:
+
+1. A node that **handles** a signal — delivers it to an application, an
+   adapter, or a local subscriber — MUST emit a `Receipt` with
+   `status = "delivered"` if the signal's delivery class is `acknowledged`,
+   and MAY do so for `best-effort`.
+2. A node that determines a signal **cannot be delivered onward** — no
+   candidate synapse, or TTL exhausted at a node that cannot handle it —
+   MUST emit a `Receipt` with `status = "rejected"` for the `acknowledged`
+   class.
+3. Receipts route with scope `Targeted` toward `signal.origin`, and traverse
+   the reverse of the recorded path where that path is still available.
+4. A `Receipt` MUST NOT itself request a receipt. Receipts are not
+   acknowledged, so the protocol cannot recurse.
+5. Receipts MUST be signed like any other signal. An unsigned or
+   unverifiable receipt MUST be discarded and MUST NOT update any weight —
+   otherwise forged receipts become the cheapest possible attack on the
+   model.
+
+See [delivery-semantics](/spec/delivery-semantics) for which signals require
+receipts.
+
+### 1.2 Outcomes and Rewards
+
+Every propagation decision is journalled and later resolved to exactly one
+outcome. The reward `r` is bounded in `[-1, 1]`:
+
+| Outcome | Trigger | Reward `r` |
+|---|---|---|
+| `delivered` | Positive receipt observed | `+1.0` |
+| `pending` | Awaiting a receipt | `0.0` |
+| `timed_out` | No receipt within the aggregation window | `-0.25` |
+| `rejected` | Negative receipt observed | `-0.5` |
+| `transport_failure` | Send failed at the transport layer | `-0.5` |
+| `signature_failure` | Peer presented an unverifiable signature | `-1.0` |
+
+Two properties are normative:
+
+- **`pending` carries zero reward.** An unresolved decision MUST NOT move
+  weights in either direction. Treating "no news" as either success or
+  failure biases the model toward whichever it treats as good.
+- **Timeout is a weaker penalty than rejection.** A timeout is ambiguous
+  (the path may be slow, or the receipt may have been lost); a rejection is
+  definite information. Penalising ambiguity as heavily as certainty makes
+  the model brittle on lossy links — the exact conditions NTL targets.
+
+Implementations MUST convert expired pending decisions into `timed_out`.
+Leaving them pending forever is a conformance violation: it is what makes
+failure silent, and silent failure is unlearnable.
+
+## 2. Weight Update Rule
+
+### 2.1 The Update
+
+On resolving a decision for synapse `s` that carried a signal of weight `x`:
+
+```
+Δw  =  η · r · x
+w'  =  clamp(w + Δw, w_min, w_max)
+```
+
+where `η` is the learning rate, `r` the reward, and `x ∈ [0, 1]` the weight
+of the signal that was carried.
+
+This is Hebbian in form — a synapse that carried traffic which turned out
+well is strengthened in proportion to how much traffic it carried — with the
+reward supplying the sign. Weighting by `x` means a low-weight signal
+teaches less than a high-weight one, so an attacker cannot buy influence
+cheaply by flooding negligible signals.
+
+### 2.2 Type Affinity
+
+Affinity is updated per signal type, so a node can learn that a peer is good
+for `Query` while being useless for `Command`:
+
+```
+affinity[t]'  =  clamp(affinity[t] + η_a · r, 0, 1)
+```
+
+with `η_a = η` unless configured otherwise. Affinity feeds the scoring
+function (§4.1) but is **not** a substitute for weight: weight governs
+whether a synapse is eligible at all, affinity governs preference among
+eligible ones.
+
+### 2.3 Outbound Normalisation (REQUIRED)
+
+After any update, a node MUST enforce a bound on its **total** outbound
+weight:
+
+```
+W  =  Σ w_i   over all non-pruned synapses
+
+if W > W_max:
+    w_i  ←  w_i · (W_max / W)   for all i
+```
+
+This divisive normalisation is what makes the model competitive rather than
+merely additive. Without it, weights inflate until every synapse saturates
+at `w_max`, the scoring function stops discriminating, and routing
+degenerates to flooding.
+
+It also bounds the blast radius of weight poisoning: an attacker who
+strengthens their own synapse necessarily dilutes it again through the
+rescaling, because the budget is fixed.
+
+### 2.4 Per-Identity Influence Cap (REQUIRED)
+
+For each peer identity `p`, a node MUST bound the total **beneficial**
+weight movement attributable to `p` within an influence window `T_infl`:
+
+```
+Σ |Δw|  over updates from p in the window  ≤  C
+```
+
+Once `p` has exhausted its budget, further updates with `r > 0` from `p`
+MUST be clamped to zero until the window rolls.
+
+The cap MUST apply **asymmetrically**: negative updates are always applied,
+regardless of remaining budget. A symmetric cap would let an attacker spend
+their own budget deliberately and become immune to penalties for the rest of
+the window.
+
+The accounting MUST be persisted, not held in memory — otherwise an attacker
+who can induce a restart resets their own budget. See
+[storage-interface](/spec/storage-interface) §6.
+
+## 3. Decay
+
+Synapse weight decays toward zero with a **half-life** `t½`:
+
+```
+w(t)  =  w(t₀) · 2^( −(t − t₀) / t½ )
+```
+
+Decay is normative, not advisory. It is what lets the network forget a peer
+that has gone away, and what stops a path that was good last year from
+outranking one that is good now.
+
+Implementations MAY apply decay lazily — computing it from `last_active_ns`
+when a synapse is read — provided the result is indistinguishable from
+continuous application. A node MUST NOT skip decay for synapses it has not
+read recently, since those are precisely the stale ones.
+
+A synapse whose decayed weight falls below `dormancy_threshold` transitions
+per [synapse-lifecycle](/spec/synapse-lifecycle).
+
+## 4. Exploration
+
+### 4.1 Path Scoring
+
+Candidate synapses are scored:
+
+```
+score(s, t)  =  β_w · w(s)
+             +  β_a · affinity(s, t)
+             +  β_l · latency_score(s)
+             +  β_r · recency_score(s)
+
+latency_score(s)  =  1 / (1 + avg_latency_ms(s))
+recency_score(s)  =  1 / (1 + hours_since_active(s))
+```
+
+with `β_w + β_a + β_l + β_r = 1`.
+
+### 4.2 Probabilistic Selection (REQUIRED)
+
+Earlier drafts selected the deterministic top-N by score. That is a pure
+exploitation policy, and it **ossifies routing**: a synapse that is never
+selected is never rewarded, so its weight only ever decays, so it is never
+selected. Initial conditions become permanent, and the network cannot
+discover a path that became good after startup. This is the rich-get-richer
+failure, and it is why the deterministic policy is no longer conforming.
+
+Conforming implementations MUST select stochastically. Two policies are
+specified; a node MUST implement at least one and SHOULD implement softmax.
+
+**Softmax (RECOMMENDED).** Sample `k = max_fanout` synapses without
+replacement from:
+
+```
+P(s_i)  =  exp( score(s_i) / τ )  /  Σ_j exp( score(s_j) / τ )
+```
+
+`τ` is the exploration temperature. As `τ → 0` selection becomes greedy; as
+`τ` grows it approaches uniform. Implementations MUST subtract
+`max_j score(s_j)` from each exponent before exponentiating, to avoid
+overflow.
+
+**ε-greedy (permitted).** With probability `1 − ε` take the top-`k` by
+score; with probability `ε` replace one selected synapse with one drawn
+uniformly from the unselected candidates. Cheaper, and adequate for nodes
+without floating-point exp.
+
+Under both policies:
+
+- A decision reached by exploration MUST be journalled with `explored =
+  true`. Exploration decisions carry information about paths the model
+  currently underrates, and separating them lets an operator see whether the
+  node is still exploring at all.
+- Synapses below `min_synapse_weight` for the scope remain excluded.
+  Exploration widens the choice among eligible paths; it does not override
+  eligibility.
+- `Targeted` scope with a direct synapse to the destination MUST NOT
+  explore. Exploration is for routing under uncertainty, and there is none
+  here.
+
+### 4.3 Exploration Floor
+
+A node MUST NOT let `τ` (or `ε`) reach zero through configuration or
+annealing. A node that has stopped exploring has stopped learning, and will
+not notice the network changing around it. Implementations SHOULD clamp to
+the `τ_min` in §5.
+
+## 5. Hyperparameters
+
+Defaults per deployment class. A node MUST expose these as configuration and
+SHOULD report its effective values.
+
+| Parameter | Symbol | Edge | Full node | High-traffic |
+|---|---|---|---|---|
+| Learning rate | `η` | `0.05` | `0.02` | `0.01` |
+| Decay half-life | `t½` | 7 days | 3 days | 24 hours |
+| Exploration temperature | `τ` | `0.15` | `0.10` | `0.05` |
+| Minimum temperature | `τ_min` | `0.02` | `0.02` | `0.01` |
+| ε (if ε-greedy) | `ε` | `0.10` | `0.05` | `0.02` |
+| Receipt aggregation window | `T_ack` | 30 s | 15 s | 5 s |
+| Minimum weight | `w_min` | `0.001` | `0.001` | `0.001` |
+| Maximum weight | `w_max` | `1.0` | `1.0` | `1.0` |
+| Total outbound budget | `W_max` | `8.0` | `32.0` | `128.0` |
+| Influence cap per peer | `C` | `0.20` | `0.10` | `0.05` |
+| Influence window | `T_infl` | 1 hour | 1 hour | 1 hour |
+| Max fanout | `k` | `3` | `5` | `8` |
+
+Rationale for the direction of travel: a high-traffic node sees more
+evidence per unit time, so it can afford a smaller learning rate (less
+variance per update), a shorter half-life (staleness is cheaper to detect),
+and less exploration (the cost of a wasted probe is paid more often). An
+edge node sees little traffic and must learn faster from less.
+
+`W_max` scales with `max_synapses` — roughly `W_max ≈ max_synapses / 8` —
+keeping mean weight near `0.125` so there is headroom both up and down.
+
+## 6. Worked Example
+
+An edge node (`η = 0.05`, `W_max = 8.0`) has three synapses and receives a
+`Query` of weight `0.8`.
+
+Scores: `A = 0.62`, `B = 0.55`, `C = 0.11`. With `τ = 0.15` and `k = 2`:
+
+```
+exp((0.62 − 0.62)/0.15) = 1.000
+exp((0.55 − 0.62)/0.15) = 0.627
+exp((0.11 − 0.62)/0.15) = 0.033
+
+P(A) = 0.603,  P(B) = 0.378,  P(C) = 0.020
+```
+
+Two are sampled. Usually `{A, B}`; roughly one time in twenty `C` is drawn
+instead — the exploration that keeps `C` from ossifying at zero.
+
+Say `A` and `C` are chosen, and `A` returns `delivered` while `C` times out:
+
+```
+A:  Δw = 0.05 · (+1.00) · 0.8 = +0.040
+C:  Δw = 0.05 · (−0.25) · 0.8 = −0.010
+```
+
+`A`'s affinity for `Query` rises by `0.05`; `C`'s falls by `0.0125`. If total
+outbound weight now exceeds `8.0`, every synapse is rescaled by
+`8.0 / W`. Both peers' influence tallies increase by `0.040` and `0.010`
+against their `C = 0.20` budgets.
+
+Repeat, and `A`'s share of `Query` traffic grows — bounded by `W_max`, by
+`A`'s influence cap, and by continued exploration of `B` and `C`.
+
+## 7. Known Failure Modes
+
+Stated explicitly because a learned system that does not document its
+failure modes cannot be operated safely.
+
+| Failure | Mechanism | Mitigation |
+|---|---|---|
+| Ossified routing | Greedy selection starves unselected paths | Probabilistic selection (§4.2), exploration floor (§4.3) |
+| Weight saturation | Additive updates inflate all weights | Outbound normalisation (§2.3) |
+| Weight poisoning | Attacker spams traffic to steer weights | Influence cap (§2.4), signed receipts (§1.1) |
+| Forged receipts | Attacker fabricates positive outcomes | Receipts MUST verify (§1.1 rule 5) |
+| Reward starvation | Nothing emits receipts; all decisions time out | Timeout is a real reward (§1.2); operators SHOULD alert on the pending ratio |
+| Thrash on lossy links | Loss read as routing failure | Timeout penalised more weakly than rejection (§1.2) |
+| Stale confidence | Weights outlive the topology | Mandatory decay (§3) |
+
+Adversarial cases are treated in full in [threat-model](/spec/threat-model).
+
+## 8. Observability
+
+A node SHOULD expose, per synapse: current weight, per-type affinity, the
+decayed-versus-nominal weight, and counts by outcome. It SHOULD also expose,
+node-wide, the fraction of decisions that were exploratory and the fraction
+still pending.
+
+These two node-wide numbers are the health check for the model. Exploration
+near zero means the node has stopped learning; a pending fraction near one
+means it is not receiving the receipts it needs to learn from, and its
+weights reflect nothing.
+
+## 9. Prior Art
+
+The design is deliberately unoriginal. Q-routing (Boyan & Littman, 1994)
+established that reinforcement-learned routing outperforms shortest-path
+under congestion; AntNet applied stigmergic reinforcement with evaporation,
+which is what §3's decay is. The contextual-bandit framing, softmax
+exploration, and divisive normalisation are all standard.
+
+What NTL adds is not the learning rule but its placement: at the transport
+layer, with per-type affinity and activation backpressure, on nodes small
+enough to be a phone. See [research/07-prior-art](/research/07-prior-art).

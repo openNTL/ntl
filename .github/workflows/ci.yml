@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features
+      - name: Doc tests
+        run: cargo test --workspace --doc
+
+  # ntl-core makes no runtime assumptions: no async executor, no sockets, no
+  # ambient clock or randomness. This job is what keeps that true — it is easy
+  # to reintroduce a dependency that pulls in getrandom or a C library and not
+  # notice until someone tries to build for the browser.
+  wasm:
+    name: wasm32 core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Check ntl-core builds for wasm32
+        run: |
+          cargo check -p ntl-core \
+            --target wasm32-unknown-unknown \
+            --no-default-features
+      - name: Confirm ntl-core pulls in no async runtime
+        run: |
+          # A transport or executor in core would break both the wasm build and
+          # the doctrine it exists to serve. Fail loudly rather than waiting for
+          # the build to fail obscurely later.
+          if cargo tree -p ntl-core --no-default-features -e normal \
+               | grep -qE '^\S* *[|`+-]* *(tokio|quinn|rustls|getrandom) '; then
+            echo "::error::ntl-core must not depend on an async runtime or transport"
+            cargo tree -p ntl-core --no-default-features -e normal
+            exit 1
+          fi
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: rustdoc
+        run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The Quick Start in the README is a promise. This runs it.
+  quickstart:
+    name: Quick Start
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the CLI
+        run: cargo build -p ntl-cli
+      - name: ntl init
+        env:
+          NTL_HOME: ${{ runner.temp }}/ntl-a
+        run: ./target/debug/ntl init
+      - name: Two nodes exchange an acknowledged signal
+        run: |
+          set -euo pipefail
+          export LISTENER="${{ runner.temp }}/ntl-b"
+          NTL_HOME="$LISTENER" ./target/debug/ntl init
+          NTL_HOME="$LISTENER" ./target/debug/ntl listen \
+            --listen 127.0.0.1:14433 > listener.log 2>&1 &
+          LISTENER_PID=$!
+          sleep 2
+
+          NTL_HOME="${{ runner.temp }}/ntl-a" ./target/debug/ntl emit \
+            --type data --payload '{"ci":true}' --acknowledged \
+            --peer 127.0.0.1:14433 --wait 8 | tee emitter.log
+
+          kill "$LISTENER_PID" || true
+          echo "--- listener ---"
+          cat listener.log
+
+          # The receipt is the whole point: it proves the loop closed and a
+          # weight was updated from a real delivery outcome.
+          grep -q "receipt delivered" emitter.log \
+            || { echo "::error::no receipt returned; the delivery loop is broken"; exit 1; }
+      - name: The learning demo separates the peers
+        run: |
+          set -euo pipefail
+          cargo run -p ntl-example-two-node-learning | tee demo.log
+          grep -q "The refusing peer lost weight" demo.log \
+            || { echo "::error::the demo did not demonstrate learning"; exit 1; }
+
+  # The MCP server is tested against real Postgres twice: PGlite in-process,
+  # and a live server. Running both is what caught the multi-statement protocol
+  # bug and the BIGINT type divergence — neither was visible to one backend.
+  mcp-server:
+    name: MCP server
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ntl
+          POSTGRES_PASSWORD: ntl
+          POSTGRES_DB: ntl
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: mcp/ntl-postgres-mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mcp/ntl-postgres-mcp-server/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test against PGlite and a live Postgres
+        run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://ntl:ntl@localhost:5432/ntl
+      - name: Worker build
+        # Catches a dependency that cannot run on Workers — a Node built-in
+        # without nodejs_compat, or a package that assumes a filesystem.
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
+
+  npm-cli:
+    name: npm CLI package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: npm/ntl-cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Packs cleanly
+        # `npm pack` surfaces a `files` list that omits something the package
+        # needs, which would publish an inert tarball.
+        run: |
+          npm pack --dry-run 2>&1 | tee pack.log
+          grep -q "bin/ntl.mjs" pack.log \
+            || { echo "::error::the wrapper is missing from the tarball"; exit 1; }
+          grep -q "scripts/install.mjs" pack.log \
+            || { echo "::error::the installer is missing from the tarball"; exit 1; }
+
+  benchmarks:
+    name: Benchmarks compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Compile-only: benchmark timings on shared runners are too noisy to
+      # gate on, but a benchmark that stops compiling is still a broken build.
+      - run: cargo build --benches --workspace

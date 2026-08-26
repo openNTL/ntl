@@ -1,11 +1,11 @@
 ---
 title: "Synapse Lifecycle"
-description: "Specification for synapse formation, state transitions, and pruning"
+description: "Normative specification for NTL synapses: the handshake, lifecycle states, weight thresholds, eligibility to carry signals, and pruning."
 "og:title": "Synapse Lifecycle — NTL Specification"
 "og:description": "Formal specification for synapse formation, state transitions, weight adjustment, and pruning in NTL."
 "twitter:title": "NTL Synapse Lifecycle Spec"
 ---
-**Version:** 0.1.0-draft
+**Version:** beta_0.0.0
 
 ## Overview
 
@@ -38,11 +38,80 @@ FORMING ──▶ ACTIVE ──▶ WEAKENING ──▶ DORMANT ──▶ PRUNED
 
 Two nodes form a synapse through a three-step handshake:
 
-1. **SYN** — Initiating node sends identity, capabilities, and supported crypto modules
-2. **SYN-ACK** — Responding node confirms, sends its own identity and selects crypto module
-3. **ACK** — Initiating node confirms, synapse enters ACTIVE state
+1. **SYN** — Initiating node sends identity, capabilities, supported crypto
+   modules, and a **fresh random challenge**
+2. **SYN-ACK** — Responding node confirms, sends its own identity, its own
+   challenge, and a signature over the initiator's challenge
+3. **ACK** — Initiating node signs the responder's challenge; the synapse
+   enters ACTIVE state
 
 The handshake MUST complete within 30 seconds or be abandoned.
+
+### The Challenge Is Not Optional
+
+A node MUST verify that the peer signed **the challenge this node just
+issued**, and that challenge MUST come from a cryptographically secure
+generator. Three requirements follow, each of which an implementation can get
+wrong while still appearing to authenticate:
+
+- **A signed hello alone is not authentication.** It is self-contained and
+  replayable, so it proves that someone once held the private key — not that
+  the party on this connection holds it. Since a node announces itself to any
+  connection, such a hello can be collected by anyone able to open a socket and
+  replayed elsewhere.
+- **A node MUST refuse a peer presenting its own identity.** Reflecting a
+  node's own messages back at it satisfies every other check — the identity
+  binding holds, the signatures are genuine, and a reflected proof answers the
+  node's own challenge — yet leaves the node with a session and an active
+  synapse under its own identity, routing its own traffic to whoever holds the
+  socket.
+- **A node SHOULD refuse a second session for an identity that already has a
+  live one**, rather than replacing it. Replacement means the most recent
+  connection captures everything routed to that peer.
+
+The consequences of getting this wrong are not confined to the connection.
+Sessions are keyed by identity, and a synapse's learned weight belongs to the
+identity, so an accepted impostor inherits the weight the genuine peer earned —
+and any signature-failure penalty it then incurs is charged to the genuine
+peer's synapse, which [threat-model](/spec/threat-model) §4 states is not
+possible.
+
+## Eligibility to Carry Signals
+
+A synapse may be chosen to carry a signal if and only if its state is
+**Active** or **Weakening**.
+
+| State | May carry signals | Why |
+|---|---|---|
+| Forming | No | Handshake incomplete |
+| Active | Yes | — |
+| **Weakening** | **Yes** | Below the active threshold but *still connected* |
+| Dormant | No | Connection idle; must be reactivated first |
+| Pruned | No | Terminal |
+
+Including `Weakening` is normative, and it is a correctness requirement
+rather than a tuning preference. A synapse regains weight only by carrying
+traffic that then succeeds ([learning-model](/spec/learning-model) §2). A
+state that is reachable from a single negative outcome *and* ineligible for
+traffic is therefore a one-way trap — the synapse can never earn its way
+back.
+
+With `initial_weight` at `0.1` and the Active threshold also at `0.1`, every
+newly formed synapse sits exactly on that boundary: one rejection would drop
+it to `Weakening`. An implementation that filtered candidates on
+`state == Active` would permanently exclude any peer that failed once, and
+routing would ossify around whichever peers happened to succeed first — the
+precise failure that [learning-model](/spec/learning-model) §4 exists to
+prevent.
+
+<Warning>
+Filtering routing candidates on `state == Active` is a conformance
+violation. Filter on eligibility.
+</Warning>
+
+`Dormant` is genuinely unavailable: the connection is idle and must be
+reactivated before it can carry anything. That is a different situation from
+a live connection with a low weight.
 
 ## Weight Management
 
@@ -52,23 +121,74 @@ New synapses MUST start with weight ≤ 0.1. This prevents new or unknown nodes 
 
 ### Weight Adjustment
 
-Weight increases when:
-- A signal is successfully transmitted and acknowledged: `w += signal.weight * 0.01`
-- Weight MUST NOT exceed the configured `max_weight` (default: 1.0)
+Synapse weight is **learned**, not configured. The normative update rule,
+its bounds, and its hyperparameters are specified in
+[learning-model](/spec/learning-model); this section states only the
+lifecycle-relevant consequences.
 
-Weight decreases when:
-- Time passes without activity: `w *= (1.0 - decay_rate)` per decay interval
-- A signal transmission fails: `w *= 0.9`
-- An invalid signal is received: `w *= 0.5`
+Weight changes on three occasions:
+
+| Occasion | Effect | Reference |
+|---|---|---|
+| A routing decision resolves to an outcome | `w ← clamp(w + η·r·x, w_min, w_max)` | [learning-model](/spec/learning-model) §2.1 |
+| Time passes | Exponential decay with half-life `t½` | [learning-model](/spec/learning-model) §3 |
+| An unverifiable signature arrives | `w ← max(w·(1−p), w_min)`, `p = 0.5` | [threat-model](/spec/threat-model) §4 |
+
+Two constraints bind every adjustment:
+
+- Weight MUST NOT exceed `max_weight` (default `1.0`) or fall below
+  `w_min` (default `0.001`).
+- Total outbound weight across all of a node's synapses MUST be bounded by
+  `W_max`, rescaling all synapses when the bound is exceeded. Without this a
+  node's synapses all saturate and the scoring function stops
+  discriminating.
+
+<Note>
+0.1.0-draft specified `w += signal.weight * 0.01` on success and
+`w *= (1 - decay_rate)` per interval. Both are superseded. The old
+increment had no notion of *whether delivery actually succeeded* — it
+rewarded transmission, not outcome — and interval-based decay gave a
+different result depending on how often the sweep happened to run.
+</Note>
 
 ### Thresholds
 
-| Threshold | Default | Transition |
-|---|---|---|
-| Active → Weakening | 0.1 | Weight drops below |
-| Weakening → Dormant | 0.01 | Weight drops below |
-| Dormant → Pruned | 0.01 for 168 hours | Duration in dormant |
-| Dormant → Active | 0.1 | Signal received, weight restored |
+| Threshold | Config field | Default | Transition |
+|---|---|---|---|
+| Active → Weakening | `active_threshold` | 0.1 | Weight drops below |
+| Weakening → Dormant | `dormancy_threshold` | 0.01 | Weight drops below |
+| Dormant → Pruned | `prune_after_hours` | 0.01 for 168 hours | Duration in dormant |
+| Dormant → Active | `active_threshold` | 0.1 | Signal received, weight restored |
+
+Both thresholds MUST come from configuration. Hard-coding them means an
+operator who retunes `initial_weight` — or either threshold — silently gets
+the shipped values, and the note above about `initial_weight` sitting exactly
+on the Active boundary stops being checkable.
+
+### Forming Is Not Weight-Derived
+
+The four weight-derived states are Active, Weakening, Dormant and Pruned. A
+weight update MUST NOT move a synapse out of `Forming`: weight says nothing
+about whether two nodes have authenticated each other, and `Forming` exists
+precisely to keep a synapse ineligible to carry signals until they have. Only
+the completion of the handshake leaves `Forming`.
+
+An implementation that promotes on the first weight update makes the state
+skippable, and with it the guarantee that traffic only ever crosses an
+authenticated synapse.
+
+### Dormant Must Not Be Terminal
+
+`Dormant` is ineligible to carry signals, and weight is earned only by carrying
+them ([learning-model](/spec/learning-model) §2). So a node that provides no way
+out of `Dormant` has made it terminal in all but name: the synapse cannot earn
+its way back and simply waits out `prune_after_hours`.
+
+**A completed handshake with a dormant peer MUST return the synapse to
+`Active`** with its weight restored to `initial_weight`. The handshake is the
+evidence the table above asks for — the peer is demonstrably reachable and
+authenticated. An implementation that treats an existing synapse record as
+nothing to do will strand every peer that was ever quiet for long enough.
 
 ## Transport Negotiation
 
@@ -81,3 +201,10 @@ During handshake, nodes negotiate transport:
 ## Synapse Limits
 
 Nodes SHOULD enforce a maximum synapse count to prevent resource exhaustion. The RECOMMENDED default is 1,000 active synapses per node. When the limit is reached, the node MUST reject new synapse requests or prune the weakest existing synapse.
+
+
+## Related
+
+- [learning-model](/spec/learning-model) — how weight and affinity are learned
+- [propagation-rules](/spec/propagation-rules) — how weight is used in routing
+- [storage-interface](/spec/storage-interface) §1 — what must survive a restart

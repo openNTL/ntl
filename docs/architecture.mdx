@@ -1,8 +1,8 @@
 ---
 title: "Architecture"
-description: "How NTL is structured and how it fits into the broader stack"
+description: "How an NTL node is structured — signals, synapses, the activation gate, the learning loop and pluggable storage — and where it sits in a stack."
 mode: "wide"
-"og:title": "NTL Architecture — How the Neural Transfer Layer is Structured"
+"og:title": "NTL Architecture — How a Node Is Structured"
 "og:description": "Explore NTL's four-layer architecture: Signal Layer, Synapse Layer, Propagation Engine, and Adapter Edge."
 "twitter:title": "NTL Architecture"
 ---
@@ -45,9 +45,9 @@ NTL is composed of four layers: the **Signal Layer**, the **Synapse Layer**, the
                     │   Crypto Module      │
                     │  (Pluggable, PQ-ready)│
                     ├──────────────────────┤
-                    │   SiafuDB            │
-                    │  (Persistent State,  │
-                    │   Graph Memory)      │
+                    │   Storage Interface  │
+                    │  (Pluggable: SQLite, │
+                    │   Postgres, graph…)  │
                     └──────────────────────┘
 ```
 
@@ -83,11 +83,30 @@ A pluggable cryptographic interface that handles signal signing, verification, a
 
 [Learn more about Security →](/security/overview)
 
-### SiafuDB Integration
+### Storage Interface
 
-NTL and SiafuDB share a common graph topology. Signals can deposit state into SiafuDB as they propagate, and SiafuDB can emit signals when state changes. This creates a unified nervous system where transport and storage are two expressions of the same underlying graph.
+The bottom layer is an interface, not a database. Everything a node must
+remember — synapse weights and type affinity, topology knowledge, the
+deduplication cache, activation state, and the learning journal — is reached
+through the [storage interface](/spec/storage-interface). Any backend
+satisfying that contract is conforming.
 
-[Learn more about SiafuDB Integration →](/guides/siafu-integration)
+| Backend | Deployment | Status |
+|---|---|---|
+| SQLite | Edge nodes (default) and full nodes | Shipping |
+| PostgreSQL | Full nodes | Planned |
+| Graph databases | Graph-native deployments | Via the same trait |
+| KV stores | Dedup cache and hot state | Via the same trait |
+
+SQLite is the default because it needs no configuration and runs on
+constrained devices — which is the edge story, not a compromise on it.
+
+Where a graph-native backend is used, the storage graph and the synapse
+topology can be the same graph: signals deposit state as they propagate, and
+state changes emit signals. That is a capability of such backends rather
+than an assumption of the protocol.
+
+[Learn more about storage backends →](/guides/storage-backends)
 
 ## Node Architecture
 
@@ -117,13 +136,13 @@ Every participant in an NTL network runs a **node**. A node can be a full partic
 │  ├── Web3 Bridge                │
 │  └── Legacy API Bridge          │
 ├─────────────────────────────────┤
-│  Local State (SiafuDB optional) │
+│  Storage Backend (pluggable)   │
 └─────────────────────────────────┘
 ```
 
 ### Full Nodes
 
-Full nodes participate in signal propagation, maintain synapse state, contribute to network topology, and optionally run a local SiafuDB instance for persistent state.
+Full nodes participate in signal propagation, maintain synapse state, contribute to network topology, and persist state through a storage backend — SQLite by default, PostgreSQL where an operator already runs one.
 
 ### Edge Nodes
 

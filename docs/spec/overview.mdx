@@ -1,13 +1,13 @@
 ---
 title: "Specification Overview"
-description: "Formal specification of the Neural Transfer Layer"
+description: "The formal openNTL protocol specification: signals, synapses, propagation, activation, delivery, storage, cryptography and the threat model."
 mode: "wide"
 "og:title": "NTL Specification — Formal Protocol Definition"
 "og:description": "The formal specification for the Neural Transfer Layer protocol, covering signals, synapses, propagation, activation, and cryptographic interfaces."
 "twitter:title": "NTL Specification"
 ---
-**Version:** 0.1.0-draft
-**Status:** Working Draft
+**Version:** beta_0.0.0
+**Status:** Beta
 **Authors:** The Bundu Foundation
 **License:** Apache 2.0
 
@@ -15,9 +15,55 @@ mode: "wide"
 
 The Neural Transfer Layer (NTL) is a neural signal-based data transfer layer for modern compute systems. It replaces the request-response paradigm of traditional APIs with signal propagation through a self-organizing, weighted graph topology. NTL is designed for AI-native systems, Web3 compatibility, post-quantum cryptographic agility, and resource-constrained environments.
 
+## Versioning
+
+The specification carries its own version, independent of any
+implementation's: **`beta_MAJOR.MINOR.PATCH`**, starting at `beta_0.0.0`.
+
+Two separate things were previously conflated under one number. A
+specification and an implementation of it move at different speeds and for
+different reasons — a wording clarification is not a release, and a bug fix in
+the reference implementation is not a specification change. Sharing a version
+made every implementation release look like a protocol revision.
+
+So:
+
+| What | Versioned as | Increments when |
+|---|---|---|
+| This specification | `beta_0.0.0` | A normative requirement is added, changed or removed |
+| The reference implementation | semver (`0.2.0-beta.1`) | Ordinary release cadence, independent of this document |
+
+The crates and npm packages must carry semver, because Cargo and npm require
+it — `beta_0.0.0` is not a valid semver string and would fail to build. That
+is not a workaround; it is the separation above working as intended.
+
+Within `beta_`, the three numbers mean what they usually do. A patch bump is
+editorial: clarified wording, a corrected example, a stated consequence that
+was already implied. A minor bump adds a requirement without invalidating a
+conforming implementation. A major bump breaks one — a changed MUST, a wire
+format revision, a removed guarantee. The `beta_` prefix drops when a second
+independent implementation interoperates; see below for why that is the gate.
+
 ## Status of This Document
 
-This is a working draft. The specification is under active development and subject to change. Feedback is welcome via the [GitHub repository](https://github.com/nyuchi-ntl/ntl).
+**Beta.** Every normative requirement here is implemented and tested in the
+reference implementation, which is what moved this out of draft: a
+specification whose claims nobody has run is a design document, not a spec.
+
+Beta rather than final because interoperability has been demonstrated between
+two instances of one implementation, not between two independent ones. Wire
+formats and normative requirements will not change gratuitously, but a second
+implementation is the thing most likely to find a requirement that is
+ambiguous or unimplementable as written, and that feedback is worth a version
+number.
+
+Where the reference implementation does **not** yet satisfy something this
+specification requires, the gap is stated in the document that requires it
+rather than left for a reader to discover — see
+[crypto-interface](/spec/crypto-interface) on `pq-v1` and
+[threat-model](/spec/threat-model) §8 on verified delivery beyond one hop.
+
+Feedback is welcome via the [GitHub repository](https://github.com/openNTL/ntl).
 
 ## Conventions
 
@@ -46,31 +92,52 @@ The NTL specification is divided into the following documents:
   <Card title="Adapter Contract" icon="plug" href="/spec/adapter-contract">
     Interface specification for protocol translation adapters
   </Card>
+  <Card title="Learning Model" icon="brain" href="/spec/learning-model">
+    Reward signals, weight updates, decay, and exploration sampling
+  </Card>
+  <Card title="Delivery Semantics" icon="paper-plane" href="/spec/delivery-semantics">
+    Best-effort and acknowledged delivery, retry, and idempotency
+  </Card>
+  <Card title="Threat Model" icon="shield-halved" href="/spec/threat-model">
+    Adversarial analysis, and what NTL does not defend against
+  </Card>
+  <Card title="Storage Interface" icon="database" href="/spec/storage-interface">
+    What a node must persist, and durability per deployment class
+  </Card>
 </CardGroup>
+
+## Changes in beta_0.0.0
+
+This revision closes the gaps that made the routing claims uncheckable and
+the protocol unusable for transactional traffic, and it is the first revision
+whose requirements are all exercised by a running implementation.
+
+| Change | Document |
+|---|---|
+| Routing model given an explicit reward signal, update rule, decay, and exploration policy | **new** [learning-model](/spec/learning-model) |
+| Adversarial analysis of learned routing, with an explicit out-of-scope list | **new** [threat-model](/spec/threat-model) |
+| `acknowledged` delivery class — failure is always reported | **new** [delivery-semantics](/spec/delivery-semantics) |
+| Storage defined as a pluggable contract, not a named database | **new** [storage-interface](/spec/storage-interface) |
+| Firing ambiguity resolved; bounded queue and overflow policy specified; refractory period made a node-class parameter | [activation-model](/spec/activation-model) |
+| Deterministic top-N fanout replaced with stochastic sampling; receipt handling and outcome journalling added | [propagation-rules](/spec/propagation-rules) |
 
 ## Design Goals
 
 1. **Signal-native** — The fundamental data unit is a signal, not a request
 2. **Self-organizing** — Network topology emerges from usage patterns
-3. **Crypto-agile** — No cryptographic scheme is hardcoded
-4. **Resource-efficient** — Designed for constrained devices and networks
-5. **Interoperable** — Adapters enable Web2, Web3, and legacy system connectivity
-6. **Open** — Fully open source, community-governed specification
-
-## Versioning
-
-The NTL specification follows semantic versioning:
-- **Major** — Breaking changes to signal format or core protocol semantics
-- **Minor** — Backward-compatible additions (new signal types, optional fields)
-- **Patch** — Clarifications and editorial corrections
+3. **Storage-agnostic** — Nodes persist state through a pluggable interface; no database is privileged
+4. **Crypto-agile** — No cryptographic scheme is hardcoded
+5. **Resource-efficient** — Designed for constrained devices and networks
+6. **Interoperable** — Adapters enable Web2, Web3, and legacy system connectivity
+7. **Open** — Fully open source, community-governed specification
 
 ## Reference Implementation
 
 The reference implementation is maintained by Nyuchi Web Services under The Bundu Foundation in Rust:
 
-- **Repository:** [github.com/nyuchi-ntl/ntl](https://github.com/nyuchi-ntl/ntl)
+- **Repository:** [github.com/openNTL/ntl](https://github.com/openNTL/ntl)
 - **Language:** Rust
-- **Minimum Rust Version:** 1.75
+- **Minimum Rust Version:** 1.85
 - **License:** Apache 2.0
 
 The reference implementation is authoritative for behavior not fully specified in this document. Where the specification and implementation differ, the specification takes precedence, and the implementation should be updated.

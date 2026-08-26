@@ -1,0 +1,38 @@
+{
+  "name": "@bundu/ntl-postgres-mcp-server",
+  "version": "0.2.0-beta.1",
+  "description": "MCP server for a PostgreSQL-backed openNTL node \u2014 a copyable template for Postgres MCP servers on Cloudflare Workers",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openNTL/ntl.git",
+    "directory": "mcp/ntl-postgres-mcp-server"
+  },
+  "homepage": "https://openntl.org/guides/postgres-mcp",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "inspect": "npx @modelcontextprotocol/inspector"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.22.0",
+    "postgres": "^3.4.7",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260820.1",
+    "@electric-sql/pglite": "^0.3.14",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.42.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: "02 — Machine Learning at the Transfer Layer"
-description: "PyTorch taught computers to think. NTL teaches networks to learn."
+description: "PyTorch taught computers to think; NTL teaches networks to learn. Which machine-learning principles transfer to a transport layer, and which do not."
 mode: "wide"
 "og:title": "Machine Learning at the Transfer Layer — NTL Research"
 "og:description": "How NTL applies machine learning principles directly to the network transport layer, enabling infrastructure that learns."
@@ -76,41 +76,102 @@ PyTorch simplified to five because it optimised for GPU computation. NTL runs on
 
 ---
 
-## Hardware Neural Engines
+## Hardware: Runs Anywhere, Neural Silicon Optional
 
-NTL's routing model runs on the same hardware that runs PyTorch models:
+NTL's routing model is **small enough that hardware choice does not matter**.
+A node with 100 synapses and 8 signal types holds fewer than a thousand
+parameters. Scoring its candidate paths is a few hundred
+multiply-accumulates — **microseconds on any CPU made this century**,
+including the one in a $5 microcontroller.
 
-| Device | NPU | TOPS | NTL Routing Inference |
-|--------|-----|------|----------------------|
-| iPhone (A14+) | Apple Neural Engine | 15.8 | Nanoseconds |
-| Snapdragon 8 Gen 2+ | Qualcomm Hexagon | 12.4 | Nanoseconds |
-| Exynos 2400+ | Samsung NPU | 14.7 | Nanoseconds |
-| Kirin 9000+ | Huawei Da Vinci | 8.0 | Nanoseconds |
+This is the honest framing, and it is the stronger claim: NTL runs
+everywhere, with no accelerator required.
 
-NTL's routing model is tiny (hundreds of parameters). These NPUs handle billion-parameter models. Routing inference is essentially free in both time and power.
+Neural silicon is therefore an *option*, not a dependency:
 
-**Every modern phone has a neural engine sitting idle.** NTL gives it a job: routing your data intelligently, learning from traffic patterns, and doing it faster and cheaper than any CPU-based routing could.
+| Device | NPU | TOPS |
+|--------|-----|------|
+| iPhone (A14+) | Apple Neural Engine | 15.8 |
+| Snapdragon 8 Gen 2+ | Qualcomm Hexagon | 12.4 |
+| Exynos 2400+ | Samsung NPU | 14.7 |
+| Kirin 9000+ | Huawei Da Vinci | 8.0 |
+
+*These figures describe the silicon's peak throughput, not NTL's need for
+it. A thousand-parameter model does not require 15 TOPS, and the table
+should not be read as implying otherwise.*
+
+<Note>
+**Two honest caveats.** First, at this model size an NPU offers no
+meaningful speedup — the work is already microseconds, and dispatch overhead
+to an accelerator would likely cost more than the computation saves. Second,
+mobile operating systems restrict NPU access from background processes,
+which is exactly where a transport layer runs; on iOS and Android a
+background NTL node should not expect NPU access at all.
+
+The upside is real but bounded: where a node *does* have accessible neural
+silicon and a much larger learned model — learned transformations rather
+than path scoring — that hardware becomes useful. Today it is not
+load-bearing, and NTL's viability does not rest on it.
+</Note>
+
+Earlier drafts of this document claimed NPU usage as a differentiator
+("every modern phone has a neural engine sitting idle; NTL gives it a job").
+That claim does not survive scrutiny at this model size, and it is withdrawn.
+What remains is better: the model is small enough to run on anything, and
+the network learns regardless of what silicon it lands on.
 
 ---
 
-## The Graph Sync Protocol as Training Loop
+## Any Acknowledgement Cycle Is a Training Loop
 
-The Graph Sync Protocol (in SiafuDB) provides the training feedback that NTL learns from:
+The general principle: **any storage or application layer that acknowledges
+what it received supplies NTL's training signal.** There is nothing
+database-specific about it. What the learning loop needs is one thing — an
+outcome flowing back — and any request/ack, sync/confirm, or publish/receipt
+cycle already provides it.
 
 ```
-1. SiafuDB produces mutation
-2. Sync protocol emits signal into NTL
-3. NTL routing model (neural network) decides path
-4. Signal propagates through synapses (transforming)
-5. Receiver applies mutation
-6. Sync protocol reports: success / conflict / failure
-7. NTL updates routing model weights
-8. Next signal routes more efficiently
+1. Producer emits a change or request
+2. Adapter turns it into an NTL signal
+3. NTL routing model samples a path over its synapses
+4. Signal propagates (transforming at synapses as configured)
+5. Receiver handles it and reports the outcome
+6. Outcome returns to the origin as a signed Receipt
+7. NTL resolves the journalled decision and updates weights
+8. Subsequent signals of that type route better
 
-Every sync cycle = one training step
+Every acknowledgement = one training step
 ```
 
-This means the sync protocol is not just moving data. It is training the network. Every mutation that flows through the system makes the routing slightly smarter. The protocol and the learning are inseparable.
+Step 6 is the one that matters, and the one NTL previously lacked. Without a
+returning outcome the loop is open, weights have no gradient, and the system
+only appears to learn. The Receipt type and the reward table in
+[spec/learning-model](/spec/learning-model) close it.
+
+### Worked Examples
+
+The same loop, over four different backing systems:
+
+| System | Producer | Outcome signal |
+|---|---|---|
+| **PostgreSQL** | Logical replication slot | Apply confirmation / conflict |
+| **Any HTTP service** | Webhook or API call | 2xx / 4xx / 5xx via a Web2 adapter |
+| **Message queue** | Published message | Consumer ack / nack |
+| **Graph sync protocol** | Graph mutation | Sync success / conflict / failure |
+
+The last row is where SiafuDB's Graph Sync Protocol fits — a good worked
+example because its conflict outcome is richer than a bare success/failure,
+so the reward it produces is more informative. It is one instance of the
+pattern, not the pattern itself.
+
+### Why Richer Outcomes Train Better
+
+A binary success/failure signal teaches less than a graded one. A conflict
+outcome says "the path worked but the write lost a race" — which should not
+penalise the *route*. Adapters SHOULD map their layer's outcome vocabulary
+onto NTL's reward table deliberately rather than collapsing everything to
+success or failure, since a mis-mapped outcome trains the model toward the
+wrong thing.
 
 ---
 
@@ -135,7 +196,10 @@ NTL's topology is a neural network. ML analysis tools work on it:
 | Network depth | Maximum hop count |
 | Activation threshold | Node activation threshold |
 
-Different deployments need different hyperparameters. High-traffic Mukoko deployment ≠ low-traffic IoT network.
+Different deployments need different hyperparameters: a high-traffic
+application deployment is not a low-traffic IoT mesh. Defaults per
+deployment class — edge, full node, high-traffic — are tabulated normatively
+in [spec/learning-model §5](/spec/learning-model).
 
 ### 3. Learned Transformations
 
@@ -151,22 +215,73 @@ Multiple NTL nodes coordinating learning, analogous to PyTorch's DistributedData
 
 ---
 
+## Known Failure Modes and Mitigations
+
+Framing NTL's routing as machine learning means inheriting ML's failure
+modes. They are enumerated here, and specified normatively in
+[spec/learning-model](/spec/learning-model) §7 and
+[spec/threat-model](/spec/threat-model).
+
+| Failure | ML name | What it looks like in NTL | Mitigation |
+|---|---|---|---|
+| Ossified routing | Insufficient exploration | Greedy top-N selection starves unselected paths; a synapse never chosen is never rewarded, so it only decays | Stochastic (softmax) selection with a temperature floor — [learning-model §4](/spec/learning-model) |
+| Weight saturation | Unbounded weights | Additive updates push every synapse to `max_weight`; scoring stops discriminating and routing degenerates to flooding | Divisive normalisation of total outbound weight — [learning-model §2.3](/spec/learning-model) |
+| Weight poisoning | Data poisoning | An attacker spams traffic to steer a victim's weights toward their own nodes | Per-identity influence caps, persisted and asymmetric — [threat-model §1](/spec/threat-model) |
+| Forged rewards | Label poisoning | Fabricated positive receipts teach the model that a bad path is good | Receipts must be signed and must match a journalled decision — [threat-model §2](/spec/threat-model) |
+| Reward starvation | Missing labels | Nothing emits receipts, so every decision stays `pending` and no weight ever moves | Timeouts are a real (weak) negative reward; operators alert on the pending fraction |
+| Over-specialisation | Overfitting | Topology tunes to current traffic and routes new patterns badly | Mandatory decay; continued exploration |
+| Stale confidence | Distribution shift | Weights outlive the topology they described | Half-life decay — [learning-model §3](/spec/learning-model) |
+| Thrash on lossy links | Label noise | Packet loss is read as routing failure, and the model oscillates | Timeout penalised more weakly than explicit rejection |
+
+Two of these deserve emphasis, because they were latent in the original
+design rather than hypothetical: **ossified routing** followed directly from
+deterministic top-N fanout, and **weight saturation** from purely additive
+updates. Both are now fixed in the specification.
+
+A learned system whose failure modes are undocumented cannot be operated
+safely. Publishing them is not an admission of weakness — it is the
+difference between a research claim and an engineering one.
+
+---
+
 ## What This Changes
 
-NTL is not a messaging protocol with ML features. NTL IS machine learning infrastructure. The routing IS a neural network. The learning IS training. The hardware IS neural silicon.
+NTL is not a messaging protocol with ML features bolted on. The routing model
+*is* a learned model, the traffic *is* its training data, and the delivery
+outcomes *are* its labels.
+
+The claim stops there, deliberately. NTL's routing is a small online
+learner — a contextual bandit over synapses — not a deep network, and it
+does not need neural silicon to run. Overstating the hardware story would
+cost more credibility than it buys.
 
 This breaks conventional thinking because:
 
 - **Protocols don't learn.** HTTP doesn't get better at routing over time. TCP doesn't strengthen paths that carry successful traffic. NTL does.
 
-- **Transfer layers don't use neural hardware.** No existing transfer protocol runs on NPUs. NTL's routing model does, because it's a neural network.
+- **Transfer layers don't learn from outcomes.** Existing protocols route on
+  configuration or on link-state metrics, not on whether delivery actually
+  succeeded for this kind of traffic. NTL closes that loop with signed
+  receipts.
 
-- **Infrastructure and ML are separate fields.** NTL unifies them. The infrastructure IS the model. The traffic IS the training data. The routing IS the inference.
+- **Infrastructure and ML are treated as separate fields.** NTL puts the
+  model *in* the infrastructure: the traffic is the training data and the
+  routing decision is the inference. This is not a new idea — Q-routing
+  demonstrated it in 1994 (see [research/07](/research/07-prior-art)) —
+  but it has not been carried into a general-purpose transport layer with
+  per-type affinity and activation backpressure.
 
-If this is achievable — and the engineering path is clear — it represents a genuine break from how data infrastructure has worked for fifty years.
+The mechanism is specified and implemented, so this is checkable rather than
+aspirational: see [spec/learning-model](/spec/learning-model) for the
+normative rules and
+[research/07-prior-art](/research/07-prior-art) for how it sits against the
+lineage it comes from.
 
 ---
 
 *Machine Learning at the Transfer Layer — April 2026 — The Bundu Foundation*
 
 *"PyTorch taught computers to think. NTL teaches networks to learn."*
+
+*See also: [spec/learning-model](/spec/learning-model) for the normative
+rules, and [research/07-prior-art](/research/07-prior-art) for the lineage.*

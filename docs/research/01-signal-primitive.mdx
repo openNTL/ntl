@@ -1,6 +1,6 @@
 ---
 title: "01 — The Signal Primitive"
-description: "A new concurrency primitive. Not a simulation of a neural network — it IS a neural network."
+description: "A new concurrency primitive: not a simulation of a neural network but an actual one, where the signal replaces the request as the base unit."
 mode: "wide"
 "og:title": "The Signal Primitive — NTL Research"
 "og:description": "A new concurrency primitive that IS a neural network, not a simulation of one. The foundational research behind NTL's signal model."
@@ -249,15 +249,36 @@ Not all twelve are needed in v1. The architecture must be capable of expressing 
 
 ---
 
-## 7. Integration with SiafuDB
+## 7. Integration with Storage Layers
 
-### Current: GSPN Adapter
+NTL specifies storage as an interface, not a database
+([spec/storage-interface](/spec/storage-interface)). Two integration
+patterns follow from that, and both are backend-agnostic.
 
-SiafuDB's GSPN adapter emits signals through a local NTL node. NTL routes, transforms, and delivers. The sync protocol provides training feedback.
+### Current: Adapter at the Boundary
 
-### Future: SiafuDB Internal Signals
+A storage layer emits signals through a local NTL node via an adapter. NTL
+routes, transforms, and delivers; the storage layer's own
+acknowledgement path supplies the delivery outcomes NTL learns from
+(§Training Loop in
+[research/02](/research/02-machine-learning-principles)).
 
-SiafuDB's internal components become signal nodes. Mutations propagate as continuous signals from the storage engine through the change log and out through NTL, with no paradigm boundary between database processing and network communication.
+Anything with a change feed and an acknowledgement can play this role —
+Postgres logical replication, a CDC stream, a graph database's sync
+protocol.
+
+### Future: Storage Internals as Signal Nodes
+
+A storage engine's internal components become signal nodes. Mutations
+propagate as continuous signals from the engine through the change log and
+out through NTL, with no paradigm boundary between database processing and
+network communication.
+
+This requires a storage layer built to participate, so it applies only to
+backends that choose to. Graph-native stores — [SiafuDB](https://siafudb.org)
+among them — are the natural candidates, since their internal topology is
+already a graph like NTL's. It is an opportunity for such backends, not an
+assumption NTL makes about any of them.
 
 ---
 

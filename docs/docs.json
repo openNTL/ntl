@@ -11,7 +11,7 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/nyuchi-ntl/ntl"
+        "href": "https://github.com/openNTL/ntl"
       },
       {
         "type": "discord",
@@ -54,7 +54,8 @@
               "guides/quickstart",
               "guides/first-signal",
               "guides/building-adapters",
-              "guides/siafu-integration"
+              "guides/storage-backends",
+              "guides/postgres-mcp"
             ]
           },
           {
@@ -96,6 +97,10 @@
               "spec/synapse-lifecycle",
               "spec/propagation-rules",
               "spec/activation-model",
+              "spec/learning-model",
+              "spec/delivery-semantics",
+              "spec/storage-interface",
+              "spec/threat-model",
               "spec/crypto-interface",
               "spec/adapter-contract"
             ]
@@ -129,29 +134,36 @@
               "research/03-neural-network-base-layer",
               "research/04-network-transport-ipv6",
               "research/05-twelve-principles",
-              "research/06-first-steps"
+              "research/06-first-steps",
+              "research/07-prior-art"
             ]
           }
         ]
       }
     ]
   },
+  "redirects": [
+    {
+      "source": "/guides/siafu-integration",
+      "destination": "/guides/storage-backends",
+      "permanent": true
+    }
+  ],
   "footer": {
     "socials": {
       "x": "https://x.com/nyuchiafrica",
-      "github": "https://github.com/nyuchi-ntl",
+      "github": "https://github.com/openNTL",
       "linkedin": "https://linkedin.com/company/nyuchi-africa"
     }
   },
   "fonts": {
-    "family": "Source Sans Pro",
-    "weight": 500,
-    "format": "woff2",
     "heading": {
-      "family": "Source Sans Pro"
+      "family": "Source Sans Pro",
+      "weight": 500
     },
     "body": {
-      "family": "Plus Jakarta Sans"
+      "family": "Plus Jakarta Sans",
+      "weight": 500
     }
   },
   "description": "NTL is an open source data transfer layer that replaces the request-response paradigm of traditional APIs with neural signal propagation. Built for the age of AI, Web3, and quantum computing.",
@@ -172,7 +184,10 @@
     "dark": "/images/ntl-icon-dark.png",
     "href": "https://openntl.org"
   },
-  "favicon": "/images/bundu-ecosystem-icons-nyuchi-icon-dark.png",
+  "favicon": {
+    "light": "/images/ntl-favicon-light.png",
+    "dark": "/images/ntl-favicon-dark.png"
+  },
   "background": {
     "decoration": "grid",
     "color": {
@@ -192,7 +207,6 @@
     "timestamp": true
   },
   "seo": {
-    "indexHiddenPages": false,
     "indexing": "all"
   },
   "banner": {
