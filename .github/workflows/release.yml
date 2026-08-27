@@ -1,11 +1,22 @@
 name: Release
 
-# Publishing is irreversible: npm unpublish is heavily restricted after 72
-# hours, and a GitHub Release tag is what `npm/ntl-cli`'s postinstall fetches
-# from. So this never runs on a push to main — only on an explicit tag, or a
-# dispatch with dry_run for rehearsing the whole thing without publishing.
+# Releasing is automatic: bump the version, merge to main, and this ships it.
+#
+# Publishing is still irreversible — npm unpublish is heavily restricted after
+# 72 hours — so "automatic" cannot mean "on every push". The guard is the
+# version itself: a push to main releases only when no release exists for the
+# version in the manifests yet. A docs commit does not release, because the
+# version did not change. Bumping the version is the deliberate act, and it
+# happens in review where it can be seen.
+#
+# Three ways in, all resolved to one decision in the verify job:
+#   - a push to main carrying a version that has not been released;
+#   - a `v*` tag push, for releasing a commit that is not main's head;
+#   - a dispatch, which rehearses by default and publishes only with
+#     dry_run explicitly false.
 on:
   push:
+    branches: ["main"]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -32,6 +43,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       npm_tag: ${{ steps.v.outputs.npm_tag }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      publish: ${{ steps.decide.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +87,46 @@ jobs:
           echo "version=$cargo_v"  >> "$GITHUB_OUTPUT"
           echo "npm_tag=$npm_tag"  >> "$GITHUB_OUTPUT"
           echo "npm dist-tag: $npm_tag"
+
+      - id: decide
+        name: Decide whether this run publishes
+        # One place, so a reader does not have to assemble the answer from
+        # `if:` expressions scattered across three jobs. Every publishing step
+        # keys off this single output.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          publish=false; reason="unrecognised trigger"
+
+          case "${GITHUB_EVENT_NAME}" in
+            push)
+              if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+                publish=true; reason="tag ${GITHUB_REF_NAME}"
+              elif gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+                # The idempotency guard. Without it every push to main would
+                # re-run a release that npm would then refuse, turning ordinary
+                # commits into red builds.
+                reason="v${VERSION} is already released; nothing to do"
+              else
+                publish=true; reason="v${VERSION} is not released yet"
+              fi
+              ;;
+            workflow_dispatch)
+              if [ "${DRY_RUN}" = "false" ]; then
+                publish=true; reason="dispatch with dry_run=false"
+              else
+                reason="dispatch rehearsal (dry_run=${DRY_RUN})"
+              fi
+              ;;
+          esac
+
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          echo "publish=${publish} — ${reason}"
+          echo "### Release decision" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`publish=${publish}\` — ${reason}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report which npm credential is available
         # Deliberately not fatal. There are two viable mechanisms and only one
@@ -183,7 +235,7 @@ jobs:
           cat checksums.txt
 
       - name: Publish the release
-        if: github.event_name == 'push'
+        if: needs.verify.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.verify.outputs.version }}
@@ -234,7 +286,7 @@ jobs:
           echo "tarball carries src/, wrangler.toml and README.md"
 
       - name: Publish @bundu/ntl-cli
-        if: github.event_name == 'push'
+        if: needs.verify.outputs.publish == 'true'
         working-directory: npm/ntl-cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -253,7 +305,7 @@ jobs:
           fi
 
       - name: Publish @bundu/ntl-postgres-mcp-server
-        if: github.event_name == 'push'
+        if: needs.verify.outputs.publish == 'true'
         working-directory: mcp/ntl-postgres-mcp-server
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -269,7 +321,7 @@ jobs:
           fi
 
       - name: Dry run summary
-        if: github.event_name != 'push'
+        if: needs.verify.outputs.publish != 'true'
         run: |
           echo "Dry run: built everything, published nothing."
           echo "Version:  ${{ needs.verify.outputs.version }}"
