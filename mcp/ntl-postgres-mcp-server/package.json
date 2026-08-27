@@ -10,7 +10,14 @@
   },
   "homepage": "https://openntl.org/guides/postgres-mcp",
   "type": "module",
-  "main": "dist/index.js",
+  "files": [
+    "src/",
+    "test/",
+    "wrangler.toml",
+    "tsconfig.json",
+    "vitest.config.ts",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
