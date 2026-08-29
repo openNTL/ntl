@@ -3,6 +3,12 @@ name = "ntl-adapter-legacy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Not published: this crate is a placeholder — one doc comment, no
+# implementation. crates.io names are global and unscoped, and a crate
+# there can be yanked but never deleted, so shipping an empty
+# "ntl-adapter-*" would be permanent. See openNTL/ntl#14.
+publish = false
+
 [dependencies]
 ntl-core.workspace = true
 tokio.workspace = true
