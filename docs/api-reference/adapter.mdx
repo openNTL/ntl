@@ -1,93 +1,275 @@
 ---
 title: "Adapter"
-description: "Rust API for the NTL Adapter trait: implement protocol translation, register handlers, and use the built-in Web2, Web3 and legacy adapters."
+description: "Rust API for the NTL Adapter trait: a synchronous protocol-translation interface in ntl-core, with a worked implementation. No adapter ships yet."
 "og:title": "Adapter API — NTL API Reference"
-"og:description": "API reference for the NTL Adapter trait and built-in protocol adapter implementations."
+"og:description": "API reference for the NTL Adapter trait: its real synchronous signature, its types, and how to implement one."
 "twitter:title": "NTL Adapter API"
 ---
 Adapters translate between NTL signals and external protocols.
 
-## Adapter Trait
+## The two things to know first
+
+**The trait is synchronous.** `ntl-core` contains no `async fn` at all, holds
+no async runtime, and reaches for no ambient clock or randomness. That is what
+keeps it building for `wasm32-unknown-unknown`, which CI enforces on every
+commit. There is no `.await` anywhere on this page, and the trait has no
+`start` or `stop`.
+
+**No adapter is implemented.** `adapters/web2`, `adapters/web3` and
+`adapters/legacy` each contain a single doc comment and no code, and all three
+are `publish = false`. There is no `Web2Adapter`, no `Web3Adapter`, no
+`LegacyAdapter`, and no `node.register_adapter`. Nothing on this page can be
+configured or run today; what it gives you is the contract to implement.
+
+<Warning>
+  **The trait is real; the adapters are not.** The `Adapter` trait in
+  `ntl-core` is normative ([spec/adapter-contract](/spec/adapter-contract)) and
+  exercised by the test suite. The [adapter guides](/adapters/overview)
+  describe intended behaviour on top of it, and their configuration keys are
+  proposed rather than parsed — no `[adapter.*]` table is read by any binary.
+
+  Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+</Warning>
+
+The crate is `ntl_core` — note the underscore in Rust paths. `Adapter` and
+`AdapterHealth` are re-exported at the root; `ExternalPayload`, `Protocol` and
+`AdapterCapabilities` live in `ntl_core::adapter`.
+
+## The Adapter trait
+
+Five methods, all synchronous, quoted from `runtime/ntl-core/src/adapter.rs`:
 
 ```rust
-trait Adapter: Send + Sync {
-    /// Translate external payload to NTL signal
-    fn ingest(&self, external: ExternalPayload) -> Result<Signal>;
+pub trait Adapter: Send + Sync {
+    /// Translate an external payload into an NTL signal.
+    fn ingest(&self, external: ExternalPayload) -> crate::Result<Signal>;
 
-    /// Translate NTL signal to external payload
-    fn emit(&self, signal: Signal) -> Result<ExternalPayload>;
+    /// Translate an NTL signal into an external payload.
+    fn emit(&self, signal: Signal) -> crate::Result<ExternalPayload>;
 
-    /// External protocol identifier
+    /// The external protocol this adapter speaks.
     fn protocol(&self) -> Protocol;
 
-    /// Adapter capabilities
+    /// Adapter capabilities.
     fn capabilities(&self) -> AdapterCapabilities;
 
-    /// Start the adapter
-    async fn start(&self) -> Result<()>;
-
-    /// Stop the adapter
-    async fn stop(&self) -> Result<()>;
-
-    /// Health check
+    /// Current health state.
     fn health(&self) -> AdapterHealth;
 }
 ```
 
-## ExternalPayload
+`crate::Result<T>` is `Result<T, ntl_core::Error>`; translation failures are
+`Error::Adapter(String)`.
+
+The `Send + Sync` bound and the `&self` receivers together mean an adapter
+holding mutable state — a sequence counter, an injected `Rng` — needs interior
+mutability. The implementation below uses a `Mutex`.
+
+## Types
+
+All four are defined in `runtime/ntl-core/src/adapter.rs` and are shown here
+with their doc comments elided.
+
+### ExternalPayload
+
+The generic container for external protocol data.
 
 ```rust
-struct ExternalPayload {
-    data: Vec<u8>,
-    content_type: String,
-    metadata: HashMap<String, String>,
+pub struct ExternalPayload {
+    pub data: Vec<u8>,
+    pub content_type: String,
+    pub metadata: std::collections::HashMap<String, String>,
 }
 ```
 
-## AdapterHealth
+### AdapterCapabilities
+
+Declared by the adapter, not inferred by the runtime.
 
 ```rust
-enum AdapterHealth {
+pub struct AdapterCapabilities {
+    pub can_ingest: bool,
+    pub can_emit: bool,
+    pub bidirectional: bool,
+    pub correlation: bool,
+    pub streaming: bool,
+}
+```
+
+### Protocol
+
+```rust
+pub enum Protocol {
+    Http,
+    WebSocket,
+    Grpc,
+    GraphQl,
+    EvmChain,
+    Did,
+    Custom(String),
+}
+```
+
+### AdapterHealth
+
+```rust
+pub enum AdapterHealth {
     Healthy,
     Degraded { reason: String },
     Unhealthy { reason: String },
 }
 ```
 
-## Built-in Adapters
+## Implementing an adapter
 
-### Web2Adapter
+Every sample below is compiled and executed by
+`runtime/ntl-core/tests/api_reference_adapter.rs`. If the trait changes, that
+test stops building — which is the only way documentation like this stays true.
+Since no adapter ships, that file is also the reference implementation.
 
-```rust
-use ntl::adapter::Web2Adapter;
-
-let adapter = Web2Adapter::builder()
-    .with_http("0.0.0.0:8080")
-    .with_websocket("0.0.0.0:8081")
-    .with_tls(true)
-    .build()?;
-
-node.register_adapter(adapter).await?;
-```
-
-### Web3Adapter
+### The struct
 
 ```rust
-use ntl::adapter::Web3Adapter;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
-let adapter = Web3Adapter::builder()
-    .with_chain("ethereum", "https://mainnet.infura.io/v3/...")
-    .with_did(true)
-    .build()?;
+use ntl_core::adapter::{AdapterCapabilities, ExternalPayload, Protocol};
+use ntl_core::rng::SplitMix64;
+use ntl_core::signal::NodeId;
+use ntl_core::time::ManualClock;
+use ntl_core::{Adapter, AdapterHealth, Signal, SignalType};
 
-node.register_adapter(adapter).await?;
+struct JsonEchoAdapter {
+    origin: NodeId,
+    clock: ManualClock,
+    rng: Mutex<SplitMix64>,
+}
 ```
 
-### LegacyAdapter
+Time and randomness are fields, not ambient calls. `ManualClock` stands in for
+whatever clock the host injects; a production adapter would hold
+`Arc<dyn Clock>`.
+
+### ingest
+
+An adapter builds an **unsigned** signal. It does not sign, and it does not
+choose the origin identity or the emission timestamp — `Node::emit` stamps
+those. `build_unsigned_with` takes the clock and RNG explicitly for exactly
+that reason.
 
 ```rust
-use ntl::adapter::LegacyAdapter;
+fn ingest(&self, external: ExternalPayload) -> ntl_core::Result<Signal> {
+    if external.content_type != "application/json" {
+        return Err(ntl_core::Error::Adapter(format!(
+            "unsupported content type: {}",
+            external.content_type
+        )));
+    }
 
-let adapter = LegacyAdapter::from_config("legacy-endpoints.toml")?;
-node.register_adapter(adapter).await?;
+    let payload: serde_json::Value = serde_json::from_slice(&external.data)
+        .map_err(|e| ntl_core::Error::Adapter(format!("payload is not JSON: {e}")))?;
+
+    let topic = external
+        .metadata
+        .get("topic")
+        .map_or("external", String::as_str);
+
+    let mut rng = self.rng.lock().expect("adapter rng lock");
+    Ok(Signal::data(topic)
+        .with_payload(payload)
+        .with_weight(0.5)
+        .build_unsigned_with(self.origin.clone(), &self.clock, &mut *rng))
+}
 ```
+
+The topic becomes the signal's first tag, which is how `Signal::data("...")`
+behaves everywhere else in the crate.
+
+### emit
+
+```rust
+fn emit(&self, signal: Signal) -> ntl_core::Result<ExternalPayload> {
+    let data = serde_json::to_vec(&signal.payload)
+        .map_err(|e| ntl_core::Error::Adapter(format!("payload is not serialisable: {e}")))?;
+
+    let mut metadata = HashMap::new();
+    metadata.insert("signal_id".to_string(), signal.id.to_string());
+    metadata.insert("tags".to_string(), signal.tags.join(","));
+
+    Ok(ExternalPayload {
+        data,
+        content_type: "application/json".to_string(),
+        metadata,
+    })
+}
+```
+
+### The metadata methods
+
+```rust
+fn protocol(&self) -> Protocol {
+    Protocol::Custom("json-echo".to_string())
+}
+
+fn capabilities(&self) -> AdapterCapabilities {
+    AdapterCapabilities {
+        can_ingest: true,
+        can_emit: true,
+        bidirectional: false,
+        correlation: false,
+        streaming: false,
+    }
+}
+
+fn health(&self) -> AdapterHealth {
+    AdapterHealth::Healthy
+}
+```
+
+Declare `correlation: false` unless the adapter really does hold the external
+connection open and match responses by `correlation_id`; the contract attaches
+requirements to that flag, including a timeout, in
+[spec/adapter-contract](/spec/adapter-contract).
+
+### Using one
+
+The trait is object-safe, so an adapter can be held as `&dyn Adapter`. Nothing
+in `ntl-core` holds a registry of adapters — whoever owns the transport owns
+the adapter and calls `ingest` and `emit` directly.
+
+```rust
+fn describe(adapter: &dyn Adapter) -> String {
+    let protocol = match adapter.protocol() {
+        Protocol::Http => "http".to_string(),
+        Protocol::WebSocket => "websocket".to_string(),
+        Protocol::Grpc => "grpc".to_string(),
+        Protocol::GraphQl => "graphql".to_string(),
+        Protocol::EvmChain => "evm-chain".to_string(),
+        Protocol::Did => "did".to_string(),
+        Protocol::Custom(name) => name,
+    };
+
+    let health = match adapter.health() {
+        AdapterHealth::Healthy => "healthy".to_string(),
+        AdapterHealth::Degraded { reason } => format!("degraded: {reason}"),
+        AdapterHealth::Unhealthy { reason } => format!("unhealthy: {reason}"),
+    };
+
+    format!("{protocol} ({health})")
+}
+```
+
+## What is not here yet
+
+| Not implemented | Where it is going |
+|---|---|
+| `Web2Adapter`, `Web3Adapter`, `LegacyAdapter` | The three placeholder crates, [#14](https://github.com/openNTL/ntl/issues/14) |
+| `node.register_adapter(...)` | `Node` has no adapter registry; the spec sketches one |
+| `start()` / `stop()` lifecycle | Not on the Rust trait; the spec's interface sketch lists them |
+| `[adapter.web2]`, `[adapter.web3]` config | Commented-out proposals in `config.example.toml`, parsed by nothing |
+
+The last three are places where
+[spec/adapter-contract](/spec/adapter-contract) is ahead of the code: it is
+normative about a registration and lifecycle surface that does not exist in
+Rust yet, and it will arrive with the first real adapter. Until then,
+`cargo doc --open` and the test above are the authority for the Rust API.
