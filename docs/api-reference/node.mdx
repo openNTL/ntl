@@ -5,85 +5,376 @@ description: "Rust API for building and running an NTL node — NodeBuilder, con
 "og:description": "API reference for NTL node initialization, lifecycle management, and the NodeBuilder pattern."
 "twitter:title": "NTL Node API"
 ---
-The `Node` is the primary entry point for the NTL runtime.
+`Node` is the entry point to the NTL runtime, and it is smaller than it looks.
+It owns storage, activation, propagation and learning — and nothing else. No
+socket, no thread, no timer. It decides what should happen to a signal and
+records the consequence; you supply the I/O and the loop that calls it.
 
-## Node::builder()
+## The one thing to know first
 
-Creates a new `NodeBuilder` for configuring and initializing a node.
+**`Node` is synchronous.** Every method on this page returns a value, not a
+future. `ntl-core` contains no `async fn` at all, holds no async runtime, and
+reaches for no ambient clock or randomness — time and entropy arrive through
+the injected `Clock` and `Rng` traits.
+
+That is not an oversight to be fixed later. It is what keeps the crate
+building for `wasm32-unknown-unknown`, which CI enforces on every commit, and
+what lets the whole decision path be tested without a network. Async lives one
+layer out, in `ntl-net`, which owns the transport and the task that drives it.
+
+So there is no `.await` anywhere below.
+
+<Note>
+  Every sample on this page is compiled **and executed** by
+  `runtime/ntl-core/tests/api_reference_node.rs`. If the API changes, that test
+  stops building. `cargo doc --open` remains the authoritative reference; this
+  page is an orientation for embedding a node.
+</Note>
+
+The crate is `ntl_core` — note the underscore in Rust paths. The `ntl` crate
+this page once imported does not exist.
+
+## Building a node
+
+`Node::builder()` returns a `NodeBuilder`. `build()` runs schema migrations,
+validates configuration and restores any persisted activation state, then
+hands back a `Node`.
 
 ```rust
+use std::sync::Arc;
+
+use ntl_core::store::MemoryStore;
+use ntl_core::{Node, NodeConfig};
+
+let store = Arc::new(MemoryStore::new());
+
 let node = Node::builder()
-    .with_config_file("~/.ntl/config.toml")    // Load from file
-    .with_crypto_module("classical-v1")                // Set crypto module
-    .with_bootstrap(vec![                        // Override bootstrap nodes
-        "ntl://bootstrap.openntl.org:4433",
-    ])
-    .with_max_synapses(500)                     // Synapse limit
-    .build()
-    .await?;
+    .with_config(NodeConfig::default())
+    .with_store(store)
+    .build()?;
 ```
 
-## node.run_until_shutdown()
+**A store is not optional.** `build()` returns `Error::Config` when none was
+supplied. There is no default: a node that silently kept its state in memory
+when you meant to persist it would lose every learned weight on restart
+without saying so.
 
-Runs the node until a shutdown signal (SIGINT/SIGTERM) is received.
+### NodeBuilder methods
+
+That is the whole builder. Six setters and a `build()`.
+
+| Method | Purpose |
+| --- | --- |
+| `with_config(NodeConfig)` | Supply configuration directly. |
+| `with_config_file(&str)` | Load configuration from a TOML file. |
+| `with_identity(NodeId)` | Set this node's identity. Otherwise it is read from the store, or generated and persisted on first build. |
+| `with_store(Arc<dyn NodeStore>)` | The storage backend. Required. |
+| `with_clock(Arc<dyn Clock>)` | Time source. Defaults to the host clock where one exists; on `wasm32` there is no default and `build()` fails without one. |
+| `with_rng(Box<dyn Rng>)` | Randomness. Defaults to a `SplitMix64` seeded from identity and time. |
+| `build()` | `ntl_core::Result<Node>`. Synchronous. |
+
+### Settings that are configuration, not builder calls
+
+Three things this page used to put on the builder are `NodeConfig` fields.
+They live there because they are validated together at load, and because a
+node that silently ignored one of them would be worse than one that refused to
+start:
+
+| Not a builder method | Where it actually lives |
+| --- | --- |
+| `with_crypto_module(..)` | `config.crypto_module`. Validated against `crypto::supported_modules()`; a module this build cannot provide is a startup failure, not a substitution. |
+| `with_bootstrap(..)` | `config.network.bootstrap_nodes` |
+| `with_max_synapses(..)` | `config.synapse.max_synapses` |
+
+### Deterministic construction
+
+Because the clock and the RNG are injected rather than ambient, a node can be
+built to replay exactly — which is how the runtime's own time-dependent
+behaviour is tested without sleeping.
 
 ```rust
-node.run_until_shutdown().await?;
+use std::sync::Arc;
+
+use ntl_core::rng::SplitMix64;
+use ntl_core::store::MemoryStore;
+use ntl_core::time::ManualClock;
+use ntl_core::{Node, NodeConfig, NodeId};
+
+let clock = Arc::new(ManualClock::starting_at(1_700_000_000_000_000_000));
+
+let node = Node::builder()
+    .with_config(NodeConfig::default())
+    .with_identity(identity)
+    .with_store(Arc::new(MemoryStore::new()))
+    .with_clock(clock.clone())
+    .with_rng(Box::new(SplitMix64::seeded(7)))
+    .build()?;
 ```
 
-## node.register_handler(handler)
+`ntl_core::testing::test_node(u8)` packages exactly this and returns the node
+alongside its `ManualClock`, so a test can advance time to exercise decay,
+refractory periods and receipt timeouts.
 
-Registers a signal handler with the node.
+## Inspecting a node
 
 ```rust
-node.register_handler(MyHandler).await?;
+let identity = node.identity().to_string();
+let max_synapses = node.config().synapse.max_synapses;
+let now_ns = node.now_ns();
+let store = node.store();
 ```
 
-## node.register_adapter(adapter)
+- `identity() -> &NodeId`
+- `config() -> &NodeConfig`
+- `store() -> &Arc<dyn NodeStore>` — the way to read node state; see [Synapses](#synapses)
+- `now_ns() -> u64` — this node's clock, not the host's
 
-Registers an adapter with the node.
+There is no `node.status()`. What that method claimed to return is spread
+across `identity()`, the store, and [`learning_health()`](#observability),
+each of which is a real value rather than a snapshot struct that could drift
+out of date.
+
+## Emitting signals
+
+The builder is handed to the node. The node stamps origin, identifier and
+timestamp and claims the signal in its own dedup cache, so there is no `emit`
+on the builder itself.
 
 ```rust
-node.register_adapter(http_adapter).await?;
+use ntl_core::Signal;
+
+let signal = node.emit(
+    Signal::data("order-placed")
+        .with_payload(serde_json::json!({ "order_id": "abc123" }))
+        .with_weight(0.8)
+        .acknowledged(),
+)?;
 ```
 
-## node.synapses()
+`emit` only creates the signal. It does not route it — that is the next call.
 
-Returns a list of all active synapses.
+## Receiving signals
 
-```rust
-let synapses = node.synapses().await?;
-```
+There is no handler registration and no listener. `SignalHandler`,
+`register_handler`, `node.listen()` and `node.wait_correlation()` are not
+identifiers this crate defines. A node is driven by whoever owns the
+transport: you hand it a signal, and it returns a `Disposition` describing
+what it decided.
 
-## node.status()
+Two entry points, for two different provenances.
 
-Returns the node's current health and status.
-
-```rust
-let status = node.status().await?;
-println!("Identity: {}", status.node_id);
-println!("Synapses: {}", status.active_synapses);
-println!("Signals processed: {}", status.signals_processed);
-```
-
-## node.listen(signal_type)
-
-Creates a listener for signals of a specific type.
+### `receive_local` — a signal this node emitted
 
 ```rust
-let mut listener = node.listen(SignalType::Event).await?;
-while let Some(signal) = listener.next().await {
-    // Process signal
+let disposition = node.receive_local(&signal)?;
+
+for forward in &disposition.forward_to {
+    // Transmit over `forward.synapse`; keep `forward.journal_id` so the
+    // outcome can be attributed when a receipt comes back.
+    let _ = (&forward.synapse, &forward.peer, forward.journal_id);
 }
 ```
 
-## node.wait_correlation(signal_id, timeout)
+Distinct from `receive` because `emit` already claimed the signal in the dedup
+cache — running it back through `receive` would see its own claim and drop it.
+A local emission also skips admission control: the node chose to send this, so
+throttling itself on its own traffic would be backwards.
 
-Waits for a response signal correlated to a specific signal ID.
+### `receive` — a signal that arrived from a peer
 
 ```rust
-let response = node.wait_correlation(
-    signal_id,
-    Duration::from_secs(30)
-).await?;
+let disposition = node.receive(arrival, arrival_synapse)?;
+
+if let Some(reason) = disposition.rejected {
+    // Refused. `disposition.receipt` is already built when the signal's
+    // delivery class requires the sender to be told.
+    let _ = reason;
+}
+if disposition.queued {
+    // The activation gate is holding it. Retain the body — and only
+    // while this stays true.
+}
+for released in &disposition.handle_locally {
+    let _ = &released.id;
+}
+if let Some(evicted) = &disposition.evicted {
+    // A *different* signal was displaced to make room, and its sender is
+    // owed a receipt of its own.
+    let _ = evicted.needs_receipt();
+}
 ```
+
+`arrival_synapse: Option<&SynapseId>` is the synapse the signal came in on, so
+the node does not route it back where it came from.
+
+### Reading a `Disposition`
+
+| Field | Meaning |
+| --- | --- |
+| `forward_to: Vec<Forward>` | Peers to send to, each with the `journal_id` recording the decision. |
+| `handle_locally: Vec<QueuedSignal>` | Signals the activation gate released for local handling. |
+| `receipt: Option<Receipt>` | A receipt you must emit, when a refusal owes the sender one. |
+| `rejected: Option<RejectReason>` | Why it was refused, if it was. Also `was_rejected()`. |
+| `evicted: Option<Evicted>` | A *different* signal displaced from the queue. Owed to a different sender, which is why it is not folded into `receipt`. |
+| `queued: bool` | Whether the arriving signal is now in the activation queue. |
+
+<Warning>
+  `queued` is load-bearing. Retain the signal body while it is true and only
+  while it is true. A caller that cannot tell "queued" from "dropped as a
+  duplicate" — both otherwise look like an empty disposition — either leaks a
+  body per duplicate or discards one it will need when the gate releases the
+  signal.
+</Warning>
+
+## Driving the node
+
+There is no `run_until_shutdown()`. The node has no thread and no timer, so
+nothing below happens on its own; the loop is yours, and it must call these.
+
+```rust
+// Release anything the gate has held past its latency guard.
+let released = node.poll_activation()?;
+for queued in &released {
+    // `queued.id` and `queued.origin` are enough to acknowledge; the body
+    // comes from whatever you retained while it was queued.
+    let _ = (&queued.id, &queued.origin, queued.delivery);
+}
+
+// Turn decisions past their deadline into learnable failures.
+let resolved = node.sweep_timeouts(128)?;
+
+// Persist the activation snapshot and flush the store.
+node.checkpoint()?;
+```
+
+Each of the three earns its place:
+
+- **`poll_activation()`** — backpressure must be a delay, not an indefinite
+  hold. The guard inside `receive` can only act when another signal arrives,
+  so a node whose traffic goes quiet needs this called periodically, or a
+  below-threshold signal waits forever while its sender times out on a path
+  that was working.
+- **`sweep_timeouts(limit)`** — this is what makes failure observable. A path
+  that never delivers produces no receipt, so without the sweep it looks
+  identical to a path never tried, and the model can never learn to avoid it.
+  Returns how many decisions were resolved.
+- **`checkpoint()`** — saves the activation snapshot, purges expired dedup
+  entries, and flushes the store. Skipping it makes a restart a free reset for
+  anyone flooding the node.
+
+A signal the gate released still needs a route, because `receive` could not
+have planned one — it did not yet know the signal would fire:
+
+```rust
+let forwards = node.plan_release(&signal, None)?;
+```
+
+## Synapses
+
+There is no `node.synapses()`. Synapses are store state, read through a
+filter. Registering one is a node method, because forming a synapse changes
+learning state.
+
+```rust
+let synapse = node.upsert_synapse(&peer)?;
+```
+
+Call it once a peer's handshake completes. A reconnecting peer whose synapse
+had gone dormant is reactivated by the same call — the handshake is the
+evidence that the peer is alive. A synapse pruned for signature failures stays
+pruned until its cooldown elapses, so a prune costs an attacker more than one
+reconnect.
+
+```rust
+use ntl_core::store::SynapseFilter;
+
+let synapses = node.store().list_synapses(&SynapseFilter::eligible())?;
+for synapse in &synapses {
+    let _ = (&synapse.peer, synapse.weight, synapse.state);
+}
+```
+
+Prefer `SynapseFilter::eligible()` over `active()` for anything
+routing-related. `eligible` includes `Weakening`, and excluding it would make
+weight recovery impossible — a synapse that failed once could never earn its
+way back. That is a normative requirement in
+[synapse-lifecycle](/spec/synapse-lifecycle), not a preference.
+
+<Warning>
+  The store's errors are `StoreError`, which does **not** convert into
+  `ntl_core::Error`. A function returning `ntl_core::Result` cannot use `?` on
+  a store call — the sample above lives in a function returning
+  `Result<usize, ntl_core::StoreError>`.
+</Warning>
+
+## Outcomes
+
+The half that makes a node learn. Every forwarding decision is journalled;
+these calls resolve one and move the synapse's weight.
+
+```rust
+let update = node.apply_receipt(&receipt, &from_peer)?;
+```
+
+Returns `Option<WeightUpdate>` — `None` when the receipt matched no pending
+decision. An unmatched receipt is discarded rather than raised, since forged
+receipts would otherwise be the cheapest attack on the routing model. A
+replayed receipt has no second effect: the first outcome wins.
+
+```rust
+let update = node.fail_forward(journal_id)?;
+```
+
+For a journalled decision whose peer turned out to be unreachable. Resolving
+it immediately teaches the model the same thing several seconds sooner than
+the timeout sweep would, and attributes it to the transport rather than the
+path.
+
+```rust
+let outcome = node.penalize_signature_failure(&synapse_id)?;
+```
+
+Returns `Option<SignatureFailureOutcome>`, carrying the failure count in the
+current influence window and whether this one crossed the threshold and pruned
+the synapse.
+
+```rust
+let factor = node.normalize_outbound_weights()?;
+```
+
+Rescales outbound weights when they exceed the node's total budget. `Some(f)`
+is the factor applied; `None` means no rescaling was needed. `apply_receipt`
+and `fail_forward` already call it after moving a weight, so you only need it
+when you have changed weights yourself.
+
+## Observability
+
+```rust
+let health = node.learning_health(256)?;
+```
+
+`LearningHealth` samples that many recent decisions and reports
+`decisions_sampled`, `exploration_ratio`, `pending_ratio` and
+`delivery_ratio`. The two middle ratios are the model's health check:
+exploration near zero means the node has stopped learning; a pending ratio
+near one means it is not receiving the receipts it needs, and its weights
+reflect nothing.
+
+## Methods that do not exist
+
+Everything this page previously documented, and what to reach for instead.
+
+| Was documented | Reality |
+| --- | --- |
+| `.await` on any node method | `ntl-core` has no `async fn`. Drop it. |
+| `use ntl::…` | The crate is `ntl_core`. |
+| `NodeBuilder::with_crypto_module` | `config.crypto_module` |
+| `NodeBuilder::with_bootstrap` | `config.network.bootstrap_nodes` |
+| `NodeBuilder::with_max_synapses` | `config.synapse.max_synapses` |
+| `node.run_until_shutdown()` | Your loop, calling `poll_activation`, `sweep_timeouts` and `checkpoint`. |
+| `node.register_handler(..)` / `SignalHandler` | `receive` / `receive_local` return a `Disposition` you act on. |
+| `node.register_adapter(..)` | The `Adapter` trait is driven by the binary that owns the transport, not registered on the node. See [Adapter](/api-reference/adapter). |
+| `node.synapses()` | `node.store().list_synapses(&SynapseFilter::eligible())` |
+| `node.status()` | `identity()`, the store, and `learning_health()`. |
+| `node.listen(signal_type)` | No listener exists. Signals reach you through `Disposition::handle_locally` and `poll_activation`. |
+| `node.wait_correlation(id, timeout)` | Correlation is a signal field (`with_correlation`); matching a reply to a request belongs to the caller, which is the layer that has a timer. |
