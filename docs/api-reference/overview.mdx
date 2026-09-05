@@ -9,80 +9,130 @@ mode: "wide"
 This section documents the public Rust API for the NTL runtime library.
 
 <Note>
-The API is under active development and subject to breaking changes until v1.0.0.
+  The API is under active development and subject to breaking changes until
+  v1.0.0. The crates are not on crates.io yet, so depend on them by git for
+  now. `cargo doc --open` in the repository is always the authoritative
+  reference; this page is an orientation.
 </Note>
+
+## The one thing to know first
+
+**`ntl-core` is synchronous.** It contains no `async` functions at all, holds no
+async runtime, and reaches for no ambient clock or randomness — those arrive
+through the injected [`Clock`](/spec/storage-interface) and `Rng` traits. That
+is what keeps the crate building for `wasm32-unknown-unknown`, which CI
+enforces on every commit.
+
+So there is no `.await` anywhere in the samples below. Async lives one layer
+out, in `ntl-net`, which owns the transport and the task that drives it.
 
 ## Crate Structure
 
+The crate is `ntl_core` — note the underscore in Rust paths.
+
 ```
-ntl
-├── ntl::node          // Node initialization and management
-├── ntl::signal        // Signal creation, encoding, and types
-├── ntl::synapse       // Synapse management and configuration
-├── ntl::propagation   // Propagation engine and scopes
-├── ntl::activation    // Activation model and functions
-├── ntl::crypto        // Pluggable cryptographic modules
-├── ntl::adapter       // Adapter trait and built-in adapters
-├── ntl::store         // Pluggable storage backends
-├── ntl::config        // Configuration loading
-└── ntl::testing       // Test utilities and mocks
+ntl_core
+├── ntl_core::node          // Node, NodeBuilder, Disposition
+├── ntl_core::signal        // Signal, SignalBuilder, SignalId, NodeId, SignalType
+├── ntl_core::synapse       // Synapse, SynapseId, SynapseState
+├── ntl_core::propagation   // scopes, scoring, header clamping
+├── ntl_core::activation    // the activation model and its functions
+├── ntl_core::crypto        // the pluggable CryptoModule interface
+├── ntl_core::delivery      // DeliveryClass, Receipt, RejectReason
+├── ntl_core::adapter       // the Adapter trait
+├── ntl_core::store         // NodeStore, MemoryStore, the conformance suite
+├── ntl_core::learning      // reward, decay, exploration, influence caps
+├── ntl_core::config        // NodeConfig and its sections
+├── ntl_core::time          // the Clock trait
+├── ntl_core::rng           // the Rng trait and SplitMix64
+├── ntl_core::topology      // peer knowledge and provenance
+└── ntl_core::testing       // deterministic Clock and Rng for tests
 ```
 
 ## Quick Reference
 
-### Creating a Node
+Every sample here is compiled and executed by
+`runtime/ntl-core/tests/api_reference_samples.rs`. If the API changes, that
+test stops building — which is the only way documentation like this stays true.
+
+### Creating a node
+
+A node needs a store. There is no default: a node that silently kept its state
+in memory when you meant to persist it would lose every learned weight on
+restart without saying so.
 
 ```rust
-use ntl::Node;
+use std::sync::Arc;
+use ntl_core::store::MemoryStore;
+use ntl_core::Node;
 
-let node = Node::builder()
-    .with_config_file("config.toml")
-    .with_crypto_module("classical-v1")
-    .build()
-    .await?;
+let store = Arc::new(MemoryStore::new());
+let node = Node::builder().with_store(store).build()?;
 ```
 
-### Emitting Signals
+`NodeBuilder` also takes `with_config`, `with_config_file`, `with_identity`,
+`with_clock` and `with_rng`. There is no `with_crypto_module`: the module is
+named in configuration (`crypto_module`), and a node asked for one this build
+cannot provide fails to start rather than substituting another.
+
+### Emitting signals
+
+The builder is handed to the node. The node stamps origin, identifier and
+timestamp, so there is no `emit` on the builder itself.
 
 ```rust
-use ntl::{Signal, SignalType};
+use ntl_core::Signal;
 
-let signal = Signal::data("user-created")
-    .with_payload(serde_json::json!({"user_id": "abc123"}))
-    .with_weight(0.7)
-    .with_tags(vec!["user", "event"])
-    .emit(&node)
-    .await?;
+let signal = node.emit(
+    Signal::data("user-created")
+        .with_payload(serde_json::json!({ "user_id": "abc123" }))
+        .with_weight(0.7)
+        .with_tags(vec!["user", "event"]),
+)?;
 ```
 
-### Handling Signals
+`Signal::event` and `Signal::command` are the other constructors. The builder
+also carries `with_ttl`, `with_scope`, `with_correlation` and `with_delivery`.
+
+### Receiving signals
+
+There is no handler-registration API. A node is driven by whoever owns the
+transport: you hand it a signal and it returns a `Disposition` describing what
+it did — queued, fired, evicted, or refused.
 
 ```rust
-use ntl::SignalHandler;
-
-struct MyHandler;
-
-impl SignalHandler for MyHandler {
-    fn signal_type(&self) -> SignalType { SignalType::Event }
-    fn tags(&self) -> Vec<&str> { vec!["user"] }
-
-    async fn handle(&self, signal: Signal) -> Result<Option<Signal>> {
-        println!("Received: {:?}", signal);
-        Ok(None)
-    }
+let disposition = node.receive_local(&signal)?;
+if disposition.queued {
+    // The activation gate holds it until the threshold is crossed.
 }
-
-node.register_handler(MyHandler).await?;
 ```
 
-### Managing Synapses
+`receive` is the peer-facing form, which additionally verifies the origin
+signature and clamps inbound headers. `poll_activation` drains whatever the
+gate has released.
+
+### Managing synapses
+
+Synapses are store state, read through a filter rather than a method on the
+node.
 
 ```rust
-let synapses = node.synapses().await?;
-for synapse in synapses {
+use ntl_core::store::SynapseFilter;
+
+for synapse in node.store().list_synapses(&SynapseFilter::eligible())? {
     println!("{}: weight={}, state={:?}", synapse.id, synapse.weight, synapse.state);
 }
 ```
+
+Prefer `SynapseFilter::eligible()` over `active()` for anything routing-related.
+`eligible` includes `Weakening`, and excluding it would make weight recovery
+impossible — a synapse that failed once could never earn its way back. That is
+a normative requirement in
+[synapse-lifecycle](/spec/synapse-lifecycle), not a preference.
+
+The store's errors are `StoreError`, which does **not** convert into
+`ntl_core::Error`. A function returning `ntl_core::Result` cannot use `?` on a
+store call.
 
 ## Module References
 
@@ -100,3 +150,13 @@ for synapse in synapses {
     Adapter trait and built-in implementations
   </Card>
 </CardGroup>
+
+<Warning>
+  **The four pages above have not had this treatment yet.** Their samples still
+  carry the errors this page just lost: `use ntl::` for a crate named
+  `ntl_core`, `.await` on synchronous functions, and identifiers that do not
+  exist in the source (`SignalHandler`, `register_handler`,
+  `with_crypto_module`, `node.synapses()`). Until they are rewritten and
+  compile-checked the same way, treat `cargo doc --open` as the reference.
+  Tracking: [openNTL/ntl#21](https://github.com/openNTL/ntl/issues/21).
+</Warning>
