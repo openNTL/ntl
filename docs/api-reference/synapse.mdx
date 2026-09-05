@@ -5,27 +5,62 @@ description: "Rust API for NTL synapses: weights, lifecycle state, type affinity
 "og:description": "API reference for NTL synapse management, configuration, and weighted connection handling."
 "twitter:title": "NTL Synapse API"
 ---
-Synapses are persistent, weighted connections between nodes.
+A synapse is a persistent, weighted connection between two nodes. It
+strengthens when it carries traffic that succeeds and weakens when that
+traffic fails or stops.
 
-## Synapse Fields
+## Two things to know first
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `SynapseId` | Unique identifier |
-| `remote_node` | `NodeId` | Connected node |
-| `weight` | `f32` | Current strength (0.0-1.0) |
-| `state` | `SynapseState` | Current lifecycle state |
-| `transport` | `Transport` | Underlying transport |
-| `established_at` | `u64` | Formation timestamp |
-| `last_active` | `u64` | Last signal timestamp |
-| `signals_transmitted` | `u64` | Total sent |
-| `signals_received` | `u64` | Total received |
-| `avg_latency_ns` | `u64` | Average latency |
+**`ntl-core` is synchronous.** The crate contains no `async` functions at all,
+so there is no `.await` anywhere on this page. That is deliberate: holding no
+async runtime is what keeps the crate building for
+`wasm32-unknown-unknown`, which CI enforces on every commit. Async lives one
+layer out, in `ntl-net`.
 
-## SynapseState Enum
+**Synapses are store state, not a collection on the node.** There is no
+`node.synapses()`. A node reads them through its store
+([`NodeStore`](/spec/storage-interface)), which is what makes them survive a
+restart — a learned weight that lived only in memory would be lost on every
+process exit without saying so.
+
+<Note>
+  Every sample on this page is compiled and executed by
+  `runtime/ntl-core/tests/api_reference_synapse.rs`. If the API changes, that
+  test stops building, which is the only way documentation like this stays
+  true.
+</Note>
+
+## Where the types live
+
+The crate is `ntl_core` — note the underscore in Rust paths.
 
 ```rust
-enum SynapseState {
+use std::sync::Arc;
+
+use ntl_core::store::{MemoryStore, SynapseFilter, SynapseRecord};
+use ntl_core::synapse::Synapse;
+use ntl_core::{Node, NodeId, StoreError, SynapseId, SynapseState};
+```
+
+`Synapse`, `SynapseId`, `SynapseState`, `NodeId`, `NodeStore` and `StoreError`
+are re-exported from the crate root. `SynapseRecord` and `SynapseFilter` are
+storage types and live in `ntl_core::store`; `Transport` and `SynapseConfig`
+live in `ntl_core::synapse`.
+
+The samples below all assume a node. Building one is synchronous, and a store
+is required:
+
+```rust
+fn creating_a_node() -> ntl_core::Result<Node> {
+    let store = Arc::new(MemoryStore::new());
+    Node::builder().with_store(store).build()
+}
+```
+
+## SynapseState
+
+```rust
+pub enum SynapseState {
     Forming,
     Active,
     Weakening,
@@ -34,27 +69,291 @@ enum SynapseState {
 }
 ```
 
-## Querying Synapses
+| State | Meaning | May carry a signal |
+|---|---|---|
+| `Forming` | Handshake in progress | No |
+| `Active` | Weight at or above `active_threshold` | Yes |
+| `Weakening` | Below the active threshold, still connected | Yes |
+| `Dormant` | Below `dormancy_threshold`, connection idle | No |
+| `Pruned` | Terminated, state archived. Terminal | No |
+
+`SynapseState::can_carry()` answers that last column, and
+`is_terminal()` is true only for `Pruned`:
 
 ```rust
-// All synapses
-let all = node.synapses().await?;
-
-// Filter by state
-let active = node.synapses()
-    .filter(|s| s.state == SynapseState::Active)
-    .await?;
-
-// Find by remote node
-let synapse = node.synapse_to(remote_node_id).await?;
+fn eligibility_by_state() {
+    assert!(SynapseState::Active.can_carry());
+    assert!(SynapseState::Weakening.can_carry());
+    assert!(!SynapseState::Forming.can_carry());
+    assert!(!SynapseState::Dormant.can_carry());
+    assert!(!SynapseState::Pruned.can_carry());
+    assert!(SynapseState::Pruned.is_terminal());
+}
 ```
 
-## Manual Synapse Management
+`Weakening` counting as eligible is a normative requirement of
+[synapse-lifecycle](/spec/synapse-lifecycle), not a tuning preference. A
+synapse recovers weight only by carrying traffic that then succeeds, so a
+state that is reachable from a single bad outcome *and* ineligible for traffic
+is a one-way trap. With `initial_weight` and `active_threshold` both at `0.1`
+by default, every new synapse would fall into it on its first failure.
+
+Only two states are not derived from the weight: `Pruned` is terminal, and
+`Forming` is left alone because a weight change is no evidence that a
+handshake completed. `Synapse::activate()` is the only exit from `Forming`.
+
+## SynapseRecord — what is persisted
+
+`SynapseRecord` is the projection that survives a restart. It is deliberately
+not the live `Synapse` struct. Every timestamp is nanoseconds since the Unix
+epoch, and the field names say so.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `SynapseId` | Unique identifier |
+| `peer` | `NodeId` | The node on the far end |
+| `weight` | `f32` | Learned weight in `[0, 1]` |
+| `attenuation_factor` | `f32` | Weight attenuation applied to signals crossing this synapse |
+| `state` | `SynapseState` | Lifecycle state |
+| `type_affinity` | `HashMap<String, u64>` | Per-signal-type success counts |
+| `established_at_ns` | `u64` | When the synapse was formed |
+| `last_active_ns` | `u64` | Last signal activity |
+| `signals_transmitted` | `u64` | Signals successfully transmitted |
+| `signals_received` | `u64` | Signals received |
+| `avg_latency_ns` | `u64` | Exponentially weighted mean round-trip latency |
+| `error_rate` | `f32` | Exponentially weighted transmission failure ratio |
+| `signature_failures` | `u32` | Failures counted in the current influence window |
+| `failure_window_start_ns` | `u64` | When that window began; zero if none |
 
 ```rust
-// Force form a synapse
-node.connect("ntl://remote-node:4433").await?;
-
-// Force prune a synapse
-node.disconnect(synapse_id).await?;
+fn reading_a_record(record: &SynapseRecord) -> u64 {
+    let idle_ns = record
+        .last_active_ns
+        .saturating_sub(record.established_at_ns);
+    let _ = (
+        record.weight,
+        record.attenuation_factor,
+        record.error_rate,
+        record.avg_latency_ns,
+        record.signals_transmitted,
+        record.signals_received,
+        record.signature_failures,
+        record.failure_window_start_ns,
+        record.type_affinity.len(),
+    );
+    idle_ns
+}
 ```
+
+The signature-failure counter and its window start are persisted for a
+reason: [threat-model](/spec/threat-model) §4 requires a synapse that
+accumulates `signature_failure_prune_threshold` failures within one influence
+window to be pruned, and a restart must not be a free amnesty.
+
+The live `Synapse` struct adds the local node, the transport, and the local
+copies of the configured thresholds (`max_weight`, `decay_rate`,
+`active_threshold`, `dormancy_threshold`). None of those are properties of
+the peer relationship, so they come from configuration rather than the store
+when a record is rehydrated:
+
+```rust
+fn live_synapse_from_record(node: &Node, record: &SynapseRecord) -> f32 {
+    let synapse = Synapse::from_record(record, node.identity().clone(), &node.config().synapse);
+    assert_eq!(synapse.remote_node, record.peer);
+    let affinity = synapse.affinity_for("data");
+    assert_eq!(synapse.to_record().id, record.id);
+    affinity
+}
+```
+
+## Listing synapses
+
+`NodeStore::list_synapses` takes a filter and returns records ordered by
+weight, descending.
+
+```rust
+fn listing_eligible_synapses(node: &Node) -> Result<Vec<SynapseRecord>, StoreError> {
+    let eligible = node.store().list_synapses(&SynapseFilter::eligible())?;
+    for synapse in &eligible {
+        let _ = format!(
+            "{} -> {}: weight={:.3} state={:?}",
+            synapse.id, synapse.peer, synapse.weight, synapse.state
+        );
+    }
+    Ok(eligible)
+}
+```
+
+<Warning>
+  Note the return type. The store's failures are `StoreError`, which does
+  **not** convert into `ntl_core::Error`. A function returning
+  `ntl_core::Result` cannot use `?` on a store call — it has to map the error
+  or return `Result<_, StoreError>`, as here.
+</Warning>
+
+`SynapseFilter` has two constructors:
+
+- **`SynapseFilter::eligible()`** — `Active` and `Weakening`. Use this for
+  anything routing-related.
+- **`SynapseFilter::active()`** — `Active` only. Use it for reporting on
+  healthy connections, not for choosing one to send over. Excluding
+  `Weakening` from routing is the trap described above; it was a real bug
+  once, and a probe showed a failing peer being retried exactly once in 301
+  rounds.
+
+For anything narrower, the four fields are public:
+
+```rust
+fn narrowing_the_filter(node: &Node) -> Result<Vec<SynapseRecord>, StoreError> {
+    let filter = SynapseFilter {
+        states: vec![SynapseState::Weakening],
+        min_weight: Some(0.02),
+        last_active_before_ns: Some(node.now_ns()),
+        limit: Some(50),
+    };
+    node.store().list_synapses(&filter)
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `states` | `Vec<SynapseState>` | Match any of these states. Empty means any state |
+| `min_weight` | `Option<f32>` | Weight at or above this value |
+| `last_active_before_ns` | `Option<u64>` | Idle since before this timestamp — used by the decay and pruning sweeps |
+| `limit` | `Option<usize>` | Cap on returned rows. `None` means no cap |
+
+## Looking up a single synapse
+
+`synapse_for_peer` finds the synapse to a given node; `get_synapse` fetches
+one by identifier. Both return `Option`, because an absent synapse is not an
+error.
+
+```rust
+fn looking_up_one_synapse(node: &Node, peer: &NodeId) -> Result<Option<SynapseId>, StoreError> {
+    let Some(record) = node.store().synapse_for_peer(peer)? else {
+        return Ok(None);
+    };
+    let same = node.store().get_synapse(&record.id)?;
+    assert_eq!(same.as_ref().map(|r| &r.id), Some(&record.id));
+    Ok(Some(record.id))
+}
+```
+
+## Forming and reactivating
+
+There is no `node.connect(url)`. Dialling an address is the transport's job,
+in `ntl-net`; the core's part is the record. `Node::upsert_synapse` forms one
+to a peer, or brings an existing one back:
+
+```rust
+fn forming_a_synapse(node: &Node, peer: &NodeId) -> ntl_core::Result<SynapseRecord> {
+    node.upsert_synapse(peer)
+}
+```
+
+This is a node method rather than a store one, so it returns
+`ntl_core::Result` — the node converts store failures on the way out. What it
+does depends on what it finds:
+
+- **Nothing** — creates the synapse and completes its handshake, since this
+  call is only reached once the transport has verified the peer against the
+  key that signed its handshake. It also records the peer in the topology
+  table with `PeerSource::Observed`.
+- **A `Dormant` synapse** — reactivates it at `initial_weight`. Returning it
+  unchanged would make `Dormant` terminal in practice: it cannot carry
+  signals, and weight is only earned by carrying them.
+- **A `Pruned` synapse** — refuses, until the signature-failure cooldown has
+  elapsed (one hour by default). Otherwise the prune would cost an attacker a
+  single reconnect.
+- **Anything else** — returns the existing record untouched.
+
+```rust
+fn pruned_synapses_refuse_to_re_form(node: &Node, peer: &NodeId) -> ntl_core::Result<()> {
+    let record = node.upsert_synapse(peer)?;
+    let threshold = node.config().learning.signature_failure_prune_threshold;
+    for _ in 0..threshold {
+        node.penalize_signature_failure(&record.id)?;
+    }
+
+    let pruned = node
+        .store()
+        .get_synapse(&record.id)
+        .expect("the store is in memory and cannot fail here")
+        .expect("the synapse is still on record after pruning");
+    assert_eq!(pruned.state, SynapseState::Pruned);
+
+    // Re-forming during the cooldown is refused rather than silently granted.
+    assert!(node.upsert_synapse(peer).is_err());
+    Ok(())
+}
+```
+
+## Writing and removing records
+
+`put_synapse` inserts or replaces; `delete_synapse` removes. Deleting an
+absent synapse is not an error, so the second call below succeeds too.
+
+```rust
+fn writing_and_deleting(node: &Node, record: &SynapseRecord) -> Result<(), StoreError> {
+    let mut updated = record.clone();
+    updated.weight = 0.5;
+    node.store().put_synapse(&updated)?;
+    node.store().delete_synapse(&updated.id)?;
+    node.store().delete_synapse(&updated.id)
+}
+```
+
+In normal operation you should rarely need either. Weights move through the
+learning path — `Node::apply_receipt`, `Node::sweep_timeouts` and
+`Node::penalize_signature_failure` — which journals the decision, applies the
+reward, respects the peer's influence budget, and re-normalises outbound
+weights. Writing a weight directly bypasses all of that.
+
+## Transport
+
+```rust
+pub enum Transport {
+    Quic,        // default: multiplexed, encrypted
+    Tcp,         // fallback, widely supported
+    Unix,        // same-machine nodes
+    BluetoothLe, // proximity mesh
+    Custom(String),
+}
+```
+
+Transport is a property of the live `Synapse`, taken from
+`SynapseConfig::preferred_transport`. It is not part of `SynapseRecord`: which
+wire a peer is currently reachable over is not learned state, and should not
+outlive the process that observed it.
+
+<Note>
+  `preferred_transport` and `fallback_transport` are commented out in
+  `config.example.toml`, and deliberately so: the reference implementation is
+  TCP-only, and neither key is read by anything yet. The enum is real; the
+  selection is not wired up.
+</Note>
+
+## SynapseConfig
+
+Reached as `node.config().synapse`, or set in the `[synapse]` section of a
+node's configuration file.
+
+| Field | Default | Description |
+|---|---|---|
+| `initial_weight` | `0.1` | Weight a new synapse starts at |
+| `max_weight` | `1.0` | Ceiling a synapse can reach |
+| `decay_rate` | `0.01` | Weight decay rate |
+| `active_threshold` | `0.1` | Weight at or above which a synapse is `Active` |
+| `dormancy_threshold` | `0.01` | Weight below which it becomes `Dormant` |
+| `prune_after_hours` | `168` | Hours dormant before pruning |
+| `max_synapses` | `1000` | Cap on synapses per node |
+| `preferred_transport` | `Quic` | First choice of transport |
+| `fallback_transport` | `Tcp` | Used when the preferred one is unavailable |
+| `attenuation_factor` | `0.9` | Weight attenuation for signals passing through |
+
+`initial_weight` and `active_threshold` coincide at `0.1`, which puts a
+freshly formed synapse exactly on the `Active` boundary: one rejection moves
+it to `Weakening`. That is the boundary
+[synapse-lifecycle](/spec/synapse-lifecycle) warns about, and the reason both
+are named here rather than hard-coded — retuning one without seeing the other
+is how the routing-ossification bug happens.
