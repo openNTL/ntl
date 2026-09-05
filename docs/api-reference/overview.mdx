@@ -151,12 +151,22 @@ store call.
   </Card>
 </CardGroup>
 
-<Warning>
-  **The four pages above have not had this treatment yet.** Their samples still
-  carry the errors this page just lost: `use ntl::` for a crate named
-  `ntl_core`, `.await` on synchronous functions, and identifiers that do not
-  exist in the source (`SignalHandler`, `register_handler`,
-  `with_crypto_module`, `node.synapses()`). Until they are rewritten and
-  compile-checked the same way, treat `cargo doc --open` as the reference.
-  Tracking: [openNTL/ntl#21](https://github.com/openNTL/ntl/issues/21).
-</Warning>
+<Note>
+  **Every sample on all five pages is compiled and run by the test suite.** Each
+  page has a test file that holds its samples verbatim, so a sample that stops
+  matching the code fails CI rather than quietly misleading a reader:
+
+  | Page | Test |
+  | --- | --- |
+  | This page | `runtime/ntl-core/tests/api_reference_samples.rs` |
+  | [Node](/api-reference/node) | `runtime/ntl-core/tests/api_reference_node.rs` |
+  | [Signal](/api-reference/signal) | `runtime/ntl-core/tests/api_reference_signal.rs` |
+  | [Synapse](/api-reference/synapse) | `runtime/ntl-core/tests/api_reference_synapse.rs` |
+  | [Adapter](/api-reference/adapter) | `runtime/ntl-core/tests/api_reference_adapter.rs` |
+
+  Before this, none of it compiled: the pages carried `use ntl::` for a crate
+  named `ntl_core`, `.await` on a crate with no `async fn`, and identifiers that
+  never existed (`SignalHandler`, `register_handler`, `with_crypto_module`,
+  `node.synapses()`). Closes
+  [openNTL/ntl#21](https://github.com/openNTL/ntl/issues/21).
+</Note>
