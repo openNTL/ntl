@@ -73,8 +73,16 @@ test("installer exits cleanly when downloads are skipped", () => {
 });
 
 test("installer survives an unreachable release host without failing install", () => {
-  // Point it at a host that cannot resolve, standing in for a proxy or an
-  // offline machine.
+  // Point the download at a closed local port, which refuses immediately: no
+  // DNS, no network, no dependence on whether a release happens to exist.
+  //
+  // This previously set HTTPS_PROXY/HTTP_PROXY to a dead port and claimed to
+  // "force resolution failure without touching the network". That never
+  // worked: Node's global fetch ignores those variables unless given an
+  // explicit dispatcher, so the request went to the real GitHub. The test
+  // passed only because no release existed yet and the fetch 404'd — and it
+  // started failing the moment v0.2.0-beta.1 was published and the download
+  // began succeeding.
   const home = mkdtempSync(join(tmpdir(), "ntl-npm-"));
   try {
     const result = spawnSync(
@@ -85,9 +93,7 @@ test("installer survives an unreachable release host without failing install", (
         env: {
           ...process.env,
           NTL_SKIP_DOWNLOAD: "",
-          // Force resolution failure without touching the network.
-          HTTPS_PROXY: "http://127.0.0.1:1",
-          HTTP_PROXY: "http://127.0.0.1:1",
+          NTL_RELEASE_BASE_URL: "http://127.0.0.1:1",
           npm_config_cache: home,
         },
       },

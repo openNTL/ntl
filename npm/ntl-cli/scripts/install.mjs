@@ -66,7 +66,14 @@ async function main() {
   const target = join(BIN_DIR, process.platform === "win32" ? "ntl.exe" : "ntl");
   if (existsSync(target)) return;
 
-  const base = `https://github.com/openNTL/ntl/releases/download/v${VERSION}`;
+  // Overridable so the fallback path can be tested deterministically. Node's
+  // global fetch ignores HTTPS_PROXY, so a test cannot force a download
+  // failure by pointing a proxy variable at a dead port — it silently reaches
+  // the real network instead. Same injection-for-testability pattern the Rust
+  // side uses for Clock and Rng.
+  const base =
+    process.env["NTL_RELEASE_BASE_URL"] ??
+    `https://github.com/openNTL/ntl/releases/download/v${VERSION}`;
   await mkdir(BIN_DIR, { recursive: true });
 
   try {
