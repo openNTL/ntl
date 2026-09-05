@@ -5,83 +5,463 @@ description: "Rust API for NTL signals: the builder, signal types, propagation s
 "og:description": "API reference for NTL signal creation, types, encoding, and constructors."
 "twitter:title": "NTL Signal API"
 ---
-Signals are the fundamental data unit in NTL.
+Signals are the fundamental data unit in NTL. This page documents
+`ntl_core::signal` — note the underscore: the crate is `ntl_core`, not `ntl`.
 
-## Signal Constructors
+## The two things to know first
+
+**`ntl-core` is synchronous.** It contains no `async` functions at all, so
+there is no `.await` anywhere below. That is what keeps the crate building for
+`wasm32-unknown-unknown`, which CI enforces on every commit. Async lives one
+layer out, in `ntl-net`.
+
+**A builder does not emit.** `Signal::data` and its siblings return a
+`SignalBuilder`, and the builder is handed to a node — `node.emit(builder)` —
+which stamps origin, identifier and timestamp. There is no `SignalBuilder::emit`.
+
+<Note>
+  Every sample on this page is compiled **and executed** by
+  `runtime/ntl-core/tests/api_reference_signal.rs`. If the API changes, that
+  test stops building — which is the only way documentation like this stays
+  true. `cargo doc --open` remains the authoritative reference.
+</Note>
+
+## Constructors
+
+There are six, plus [`Signal::receipt`](#delivery-and-receipts). Each returns a
+`SignalBuilder`. `discovery` and `heartbeat` take no topic; the rest take
+`&str`.
 
 ```rust
-// Data signal
-Signal::data("topic")
+let data = Signal::data("orders.created").build_unsigned(origin.clone());
+let query = Signal::query("orders.lookup").build_unsigned(origin.clone());
+let event = Signal::event("order.shipped").build_unsigned(origin.clone());
+let command = Signal::command("order.cancel").build_unsigned(origin.clone());
+let discovery = Signal::discovery().build_unsigned(origin.clone());
+let heartbeat = Signal::heartbeat().build_unsigned(origin.clone());
 
-// Query signal
-Signal::query("topic")
-
-// Event signal
-Signal::event("topic")
-
-// Command signal
-Signal::command("topic")
-
-// Discovery signal
-Signal::discovery()
-
-// Heartbeat signal
-Signal::heartbeat()
+assert_eq!(data.signal_type, SignalType::Data);
+assert_eq!(discovery.tags, vec!["discovery".to_string()]);
 ```
 
-## Builder Methods
+`build_unsigned(origin)` closes a builder without a node, using the host clock
+and a seeded generator; it is a convenience for tests and binaries and is not
+compiled for `wasm32`. Core logic should use `build_unsigned_with(origin, clock,
+rng)` so time and randomness stay injectable — or, in an application,
+`node.emit`.
+
+## Builder methods
+
+| Method | Argument | Default |
+|---|---|---|
+| `with_payload` | `serde_json::Value` | `Value::Null` |
+| `with_weight` | `f32`, clamped to `0.0..=1.0` | `0.5` |
+| `with_ttl` | `u16` hops | `10` |
+| `with_scope` | `PropagationScope` | `Weighted { min_synapse_weight: 0.0 }` |
+| `with_correlation` | `SignalId` | none |
+| `with_tags` | `Vec<&str>` | empty |
+| `with_delivery` | `DeliveryClass` | `BestEffort` |
+| `acknowledged` | — | shorthand for `with_delivery(Acknowledged)` |
+
+Two behaviours are easy to get wrong from the signatures alone. `with_weight`
+**clamps** rather than rejecting, and the **topic is not a field** — it is
+pushed onto the front of `tags`.
 
 ```rust
-let signal = Signal::data("user-profile")
-    .with_payload(json!({"id": "abc123"}))  // Set payload
-    .with_weight(0.8)                        // Set weight (0.0-1.0)
-    .with_ttl(5)                             // Set TTL
-    .with_tags(vec!["user", "profile"])      // Set tags
-    .with_correlation(other_signal.id)       // Set correlation
-    .with_scope(PropagationScope::Targeted { // Set scope
-        destination: node_id
-    })
-    .emit(&node)                             // Emit to network
-    .await?;
+let signal = Signal::data("orders.created").build_unsigned(origin.clone());
+
+assert_eq!(signal.weight, 0.5);
+assert_eq!(signal.ttl, 10);
+assert_eq!(signal.delivery, DeliveryClass::BestEffort);
+assert_eq!(signal.encoding, Encoding::Cbor);
+
+// The topic is not a field: it is pushed onto the front of `tags`.
+assert_eq!(signal.tags, vec!["orders.created".to_string()]);
+
+// Out-of-range weights are clamped by the builder, not rejected.
+let clamped = Signal::data("orders.created")
+    .with_weight(1.5)
+    .build_unsigned(origin.clone());
+assert_eq!(clamped.weight, 1.0);
 ```
 
-## Signal Fields
+<Warning>
+  Tags are visible to every node on the path, and they are covered by the
+  origin signature but not encrypted. Do not put sensitive data in them.
+</Warning>
+
+## Emitting through a node
+
+```rust
+let signal = node.emit(
+    Signal::event("order.shipped")
+        .with_payload(serde_json::json!({ "order_id": "A-1" }))
+        .with_weight(0.7)
+        .with_ttl(6)
+        .with_tags(vec!["orders", "fulfilment"])
+        .with_scope(PropagationScope::Weighted {
+            min_synapse_weight: 0.2,
+        })
+        .with_delivery(DeliveryClass::Acknowledged),
+)?;
+
+assert_eq!(signal.weight, 0.7);
+assert_eq!(
+    signal.tags,
+    vec![
+        "order.shipped".to_string(),
+        "orders".to_string(),
+        "fulfilment".to_string(),
+    ]
+);
+```
+
+`emit` returns `ntl_core::Result<Signal>` synchronously. It also claims the
+signal in the node's dedup cache, so an emission that loops back is not
+mistaken for a new arrival — which is why a locally emitted signal goes to
+`node.receive_local`, not `node.receive`.
+
+For request-response, correlate the reply with the request's identifier:
+
+```rust
+let reply = node.emit(
+    Signal::data("orders.lookup.reply")
+        .with_payload(serde_json::json!({ "status": "shipped" }))
+        .with_correlation(request.id),
+)?;
+
+assert_eq!(reply.correlation_id, Some(request.id));
+```
+
+## Signal fields
+
+The struct has fifteen public fields. All are `pub`; there are no accessors.
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | `SignalId` | ULID identifier |
-| `signal_type` | `SignalType` | Type enum |
-| `origin` | `NodeId` | Emitting node |
+| `id` | `SignalId` | ULID, 16 bytes on the wire |
+| `signal_type` | `SignalType` | Type classification |
+| `version` | `u8` | Protocol version, currently `1` |
+| `origin` | `NodeId` | Emitting node, stamped by `emit` |
+| `signature` | `Vec<u8>` | Origin signature over `signing_bytes()` |
+| `timestamp` | `u64` | Emission time, nanoseconds since the epoch |
 | `payload` | `serde_json::Value` | Signal data |
-| `weight` | `f32` | Priority (0.0-1.0) |
+| `encoding` | `Encoding` | `Cbor`, `Protobuf` or `Raw` |
+| `weight` | `f32` | Priority, `0.0`–`1.0` |
 | `ttl` | `u16` | Remaining hops |
-| `timestamp` | `u64` | Emission time (ns) |
-| `tags` | `Vec<String>` | Searchable tags |
-| `correlation_id` | `Option<SignalId>` | Response correlation |
-| `trace` | `Vec<NodeId>` | Propagation path |
+| `scope` | `PropagationScope` | How it routes |
+| `correlation_id` | `Option<SignalId>` | Request-response link |
+| `trace` | `Vec<NodeId>` | Path travelled, capped at 64 entries |
+| `tags` | `Vec<String>` | Searchable tags, topic first |
+| `delivery` | `DeliveryClass` | `BestEffort` or `Acknowledged` |
 
-## SignalType Enum
+`emit` stamps identity, not a signature — `signature` comes back empty, and
+signing happens before transmission:
 
 ```rust
-enum SignalType {
+assert_eq!(&signal.origin, node.identity());
+assert_eq!(signal.version, 1);
+assert!(signal.timestamp > 0);
+assert!(signal.trace.is_empty());
+assert!(signal.signature.is_empty());
+```
+
+`validate()` therefore refuses a signal until it has been signed. It checks
+three things: weight in range, non-zero TTL, and a non-empty signature.
+
+```rust
+let unsigned = Signal::data("orders.created").build_unsigned(origin.clone());
+assert!(unsigned.validate().is_err());
+
+let mut signed = unsigned;
+signed.signature = vec![0u8; 64];
+assert!(signed.validate().is_ok());
+
+let mut expired = signed;
+expired.ttl = 0;
+assert!(expired.is_expired());
+assert!(expired.validate().is_err());
+```
+
+## SignalType
+
+```rust
+pub enum SignalType {
     Data,
     Query,
     Event,
     Command,
     Heartbeat,
     Discovery,
-    Ack,
+    Receipt,
     Custom(String),
 }
 ```
 
-## PropagationScope Enum
+The acknowledgement variant is `Receipt`, **not** `Ack`. It was named `Ack` in
+0.1.0-draft; the wire value is unchanged, but the type now carries a structured
+outcome, because a bare confirmation cannot say *why* a signal failed.
+
+`to_type_byte` and `from_type_byte` cross the wire. `Custom` is byte 15 and has
+no round trip: the discriminant alone does not carry the application-defined
+name, so `from_type_byte(15)` returns `None` and the caller must supply it.
 
 ```rust
-enum PropagationScope {
+for signal_type in [
+    SignalType::Data,
+    SignalType::Query,
+    SignalType::Event,
+    SignalType::Command,
+    SignalType::Heartbeat,
+    SignalType::Discovery,
+    SignalType::Receipt,
+] {
+    let byte = signal_type.to_type_byte();
+    assert_eq!(SignalType::from_type_byte(byte), Some(signal_type));
+}
+
+let custom = SignalType::Custom("orders.bespoke".to_string());
+assert_eq!(custom.to_type_byte(), 15);
+assert_eq!(SignalType::from_type_byte(15), None);
+
+// A receipt is never itself acknowledged, so the protocol cannot recurse.
+assert!(!SignalType::Receipt.can_be_acknowledged());
+```
+
+## PropagationScope
+
+```rust
+pub enum PropagationScope {
     Flood { max_hops: u16 },
     Weighted { min_synapse_weight: f32 },
     Targeted { destination: NodeId },
     Gradient { signal_type: String },
 }
 ```
+
+`Weighted { min_synapse_weight: 0.0 }` is the default. `Flood` is the one scope
+that ignores `max_fanout`, so `max_hops` is the only thing bounding total
+fan-out: a flood of depth *d* over nodes of degree *f* touches on the order of
+*f^d* synapses. Use it sparingly.
+
+```rust
+let scopes = [
+    PropagationScope::Flood { max_hops: 3 },
+    PropagationScope::Weighted {
+        min_synapse_weight: 0.4,
+    },
+    PropagationScope::Targeted {
+        destination: destination.clone(),
+    },
+    PropagationScope::Gradient {
+        signal_type: "orders".to_string(),
+    },
+];
+
+for scope in scopes {
+    let signal = Signal::data("orders.created")
+        .with_scope(scope)
+        .build_unsigned(origin.clone());
+    assert!(signal.encode().is_ok());
+}
+```
+
+## Delivery and receipts
+
+`BestEffort` may be silently absorbed below `min_propagation_weight`. That is
+fine for telemetry and disqualifying for anything with a side effect, so
+`Acknowledged` guarantees at-least-once delivery *or* a receipt saying it
+failed.
+
+`Signal::receipt(&receipt, origin)` builds the reply: it correlates to the
+acknowledged signal, routes `Targeted` back at that signal's origin, and
+refuses to be acknowledged itself — `.acknowledged()` on it is a no-op.
+
+```rust
+let command = node.emit(Signal::command("payment.capture").acknowledged())?;
+assert_eq!(command.delivery, DeliveryClass::Acknowledged);
+assert!(command.requires_receipt());
+
+let receipt = Receipt::rejected(command.id, RejectReason::NoRoute, 3);
+assert!(!receipt.is_delivered());
+assert!(RejectReason::NoRoute.is_transient());
+assert_eq!(RejectReason::NoRoute.as_str(), "no_route");
+
+let reply = node.emit(Signal::receipt(&receipt, command.origin.clone()).acknowledged())?;
+assert_eq!(reply.signal_type, SignalType::Receipt);
+assert_eq!(reply.correlation_id, Some(command.id));
+assert_eq!(reply.delivery, DeliveryClass::BestEffort);
+assert!(matches!(reply.scope, PropagationScope::Targeted { .. }));
+```
+
+`RejectReason` is `BelowThreshold`, `TtlExhausted`, `NoRoute`,
+`TransportFailure`, `QueueFull`, `UnsupportedType` or `Refused`. Check
+`is_transient()` before retrying: retrying a terminal rejection is pure waste.
+
+## Propagation mechanics
+
+`hop` decrements TTL and appends to the trace; `attenuate` scales the weight
+and clamps it back into range; `has_visited` is the loop check.
+
+```rust
+let mut signal = Signal::data("orders.created")
+    .with_weight(1.0)
+    .with_ttl(2)
+    .build_unsigned(origin.clone());
+
+let relay = NodeId(vec![7u8; 32]);
+signal.hop(relay.clone());
+assert_eq!(signal.ttl, 1);
+assert!(signal.has_visited(&relay));
+
+signal.attenuate(0.9);
+assert!((signal.weight - 0.9).abs() < 1e-6);
+
+signal.hop(NodeId(vec![8u8; 32]));
+assert_eq!(signal.ttl, 0);
+assert!(signal.is_expired());
+```
+
+`attenuate_for_hop(factor, min_propagation_weight)` is the form a router should
+use: for an acknowledged signal it clamps at the floor while TTL remains,
+because otherwise a path of more than a few hops guarantees a `below_threshold`
+rejection regardless of routing quality.
+
+## Encoding
+
+The wire format is CBOR. `Signal::MAX_SIZE` is 1 MiB, and `decode` checks the
+bound **before** parsing — validation is ordered cheapest-first so malformed
+traffic cannot impose expensive work.
+
+```rust
+let bytes = signal.encode()?;
+assert!(bytes.len() <= Signal::MAX_SIZE);
+
+let decoded = Signal::decode(&bytes)?;
+assert_eq!(decoded.id, signal.id);
+assert_eq!(decoded.payload, signal.payload);
+
+// Oversize input is refused before it is parsed.
+let oversize = vec![0u8; Signal::MAX_SIZE + 1];
+assert!(Signal::decode(&oversize).is_err());
+```
+
+`estimated_size()` gives a cheap approximation without encoding.
+
+## What the signature covers
+
+`signing_bytes()` returns the signal's **immutable** content: `id`,
+`signal_type`, `version`, `origin`, `timestamp`, `payload`, `encoding`,
+`scope`, `correlation_id`, `tags` and `delivery`. A relay cannot rewrite a
+payload or downgrade an acknowledged signal to best-effort without breaking it.
+
+Four fields are deliberately **excluded**, because propagation mutates them by
+design and a signature over them could not survive a single hop:
+
+| Excluded field | Mutated by |
+|---|---|
+| `signature` | the signature itself |
+| `trace` | each node appending its id |
+| `ttl` | each hop decrementing it |
+| `weight` | attenuation at each synapse |
+
+<Warning>
+  The consequence is worth stating plainly: **an on-path node can inflate a
+  signal's weight or TTL, and the origin signature will still verify.** What
+  bounds the abuse is that a receiving node enforces its own `max_accepted_ttl`
+  and weight limits, hop-to-hop authenticity comes from the synapse rather than
+  this signature, and a peer that misbehaves loses synapse weight. See
+  [threat-model](/spec/threat-model) §6.
+</Warning>
+
+```rust
+let signal = Signal::data("orders.created")
+    .with_payload(serde_json::json!({ "order_id": "A-1" }))
+    .with_weight(0.8)
+    .with_ttl(9)
+    .build_unsigned(origin.clone());
+let covered = signal.signing_bytes()?;
+
+// An on-path node can inflate weight and TTL: the bytes still match.
+let mut relayed = signal.clone();
+relayed.ttl = 64;
+relayed.weight = 1.0;
+relayed.trace.push(NodeId(vec![7u8; 32]));
+relayed.signature = vec![1u8; 64];
+assert_eq!(relayed.signing_bytes()?, covered);
+
+// Rewriting the payload does not.
+let mut tampered = signal.clone();
+tampered.payload = serde_json::json!({ "order_id": "A-2" });
+assert_ne!(tampered.signing_bytes()?, covered);
+
+// Nor does downgrading — or upgrading — the delivery class.
+let mut reclassified = signal;
+reclassified.delivery = DeliveryClass::Acknowledged;
+assert_ne!(reclassified.signing_bytes()?, covered);
+```
+
+Sign `signing_bytes()`, never `encode()`. With the `classical-crypto` feature:
+
+```rust
+use ntl_core::crypto::{ClassicalModule, CryptoModule, Signature, node_id_from_public_key};
+
+let (public, private) = ClassicalModule::keypair_from_seed(&[7u8; 32])?;
+let origin = node_id_from_public_key(&public);
+
+let module = ClassicalModule;
+let mut signal = Signal::data("orders.created").build_unsigned(origin);
+signal.signature = module.sign(&signal.signing_bytes()?, &private)?.0;
+assert!(signal.validate().is_ok());
+
+let signature = Signature(signal.signature.clone());
+assert!(module.verify(&signal.signing_bytes()?, &signature, &public)?);
+
+// Still verifies after a hop, which is what the exclusions are for.
+signal.hop(NodeId(vec![7u8; 32]));
+signal.attenuate(0.9);
+assert!(module.verify(&signal.signing_bytes()?, &signature, &public)?);
+```
+
+## SignalId
+
+A ULID, so identifiers sort lexicographically by emission time. It serialises
+as the **16 raw bytes** the wire format specifies, not as the 26-character
+Crockford base32 string — the string form is for humans and logs, and costs 10
+extra bytes per signal.
+
+```rust
+let bytes: [u8; 16] = signal.id.to_bytes();
+assert_eq!(SignalId::from_bytes(bytes), signal.id);
+assert_eq!(signal.id.to_string().len(), 26);
+assert!(signal.id.timestamp_ms() > 0);
+```
+
+`SignalId::generate(clock, rng)` takes its time and randomness as arguments:
+`ulid`'s own constructor pulls in `getrandom`, which does not build for
+`wasm32-unknown-unknown`, and an injected clock makes ULID time-ordering
+directly testable. `generate_now(rng)` is the host-only convenience, and
+`from_parts(timestamp_ms, randomness)` the fully explicit form.
+
+## Imports
+
+Everything above resolves from these paths:
+
+```rust
+use std::sync::Arc;
+
+use ntl_core::delivery::{Receipt, RejectReason};
+use ntl_core::signal::Encoding;
+use ntl_core::store::MemoryStore;
+use ntl_core::{DeliveryClass, Node, NodeId, PropagationScope, Signal, SignalId, SignalType};
+
+let node = Node::builder()
+    .with_store(Arc::new(MemoryStore::new()))
+    .build()?;
+let origin = node.identity().clone();
+```
+
+`Signal`, `SignalId`, `SignalType`, `NodeId`, `PropagationScope`,
+`DeliveryClass`, `Receipt` and `RejectReason` are re-exported at the crate
+root. `Encoding` and `SignalBuilder` are not — reach for them in
+`ntl_core::signal`.
