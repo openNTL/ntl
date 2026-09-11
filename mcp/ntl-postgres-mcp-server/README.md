@@ -36,7 +36,7 @@ SELECT * INTO new_table FROM t;                          -- SELECT that creates
 
 A blocklist has to anticipate all of it. Postgres already knows which
 statements write, so read-only tools run inside `BEGIN TRANSACTION READ ONLY`
-and the *database* rejects the write with SQLSTATE 25006. There is nothing for
+and the _database_ rejects the write with SQLSTATE 25006. There is nothing for
 a cleverly-phrased statement to slip past.
 
 There is exactly one way out of a transaction, and it is not clever phrasing —
@@ -46,7 +46,7 @@ it is ending the transaction:
 COMMIT; DROP TABLE ntl.synapses;
 ```
 
-That works only over the *simple* query protocol, which accepts several
+That works only over the _simple_ query protocol, which accepts several
 commands in one string and honours transaction control. So the boundary is the
 protocol, not a check on the string: read-only queries are pinned to the
 extended protocol, which accepts exactly one command, and Postgres rejects the
@@ -55,7 +55,7 @@ throws if it is ever reached inside a read-only transaction, and is only
 routed to when the operator has enabled writes.
 
 This is worth dwelling on if you copy the file, because an earlier version of
-it had the hole: `COMMIT; DROP TABLE canary` returned *success* on both
+it had the hole: `COMMIT; DROP TABLE canary` returned _success_ on both
 drivers, and the trailing `COMMIT` that should have complained produced only a
 notice, which was being swallowed. The transaction was doing its job; the
 protocol underneath it was not.
@@ -88,33 +88,33 @@ the read-only refusal explains how to enable writes rather than just saying no.
 
 Read-only, always available:
 
-| Tool | What it does |
-|---|---|
-| `ntl_list_tables` | Tables, views, row estimates, sizes, optionally columns |
-| `ntl_list_extensions` | Installed and available extensions |
-| `ntl_list_migrations` | Migrations applied through this server |
-| `ntl_generate_typescript_types` | TypeScript interfaces from the live schema |
-| `ntl_execute_sql` | Arbitrary SQL, read-only unless writes are enabled |
-| `ntl_get_advisors` | Security and performance lint over the live database |
-| `ntl_get_activity` | Current connections and slowest statements |
-| `ntl_search_docs` | openNTL documentation, indexed offline |
+| Tool                            | What it does                                            |
+| ------------------------------- | ------------------------------------------------------- |
+| `ntl_list_tables`               | Tables, views, row estimates, sizes, optionally columns |
+| `ntl_list_extensions`           | Installed and available extensions                      |
+| `ntl_list_migrations`           | Migrations applied through this server                  |
+| `ntl_generate_typescript_types` | TypeScript interfaces from the live schema              |
+| `ntl_execute_sql`               | Arbitrary SQL, read-only unless writes are enabled      |
+| `ntl_get_advisors`              | Security and performance lint over the live database    |
+| `ntl_get_activity`              | Current connections and slowest statements              |
+| `ntl_search_docs`               | openNTL documentation, indexed offline                  |
 
 openNTL domain tools — these are what make it openNTL's server rather than a
 generic Postgres one:
 
-| Tool | What it answers |
-|---|---|
-| `ntl_list_synapses` | What has the node learned? Weights, per-type affinity, decayed vs stored weight |
-| `ntl_get_learning_health` | Is the model actually learning? Exploration and pending ratios |
-| `ntl_list_journal` | Routing decisions and their outcomes — the training data |
-| `ntl_get_node_status` | Identity, topology, activation snapshot, dedup entries |
+| Tool                      | What it answers                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| `ntl_list_synapses`       | What has the node learned? Weights, per-type affinity, decayed vs stored weight |
+| `ntl_get_learning_health` | Is the model actually learning? Exploration and pending ratios                  |
+| `ntl_list_journal`        | Routing decisions and their outcomes — the training data                        |
+| `ntl_get_node_status`     | Identity, topology, activation snapshot, dedup entries                          |
 
 Write tools, only when `ALLOW_WRITES=true`:
 
-| Tool | What it does |
-|---|---|
+| Tool                  | What it does                                           |
+| --------------------- | ------------------------------------------------------ |
 | `ntl_apply_migration` | Apply DDL in one transaction and record it in a ledger |
-| `ntl_init_schema` | Create the openNTL schema. Idempotent. |
+| `ntl_init_schema`     | Create the openNTL schema. Idempotent.                 |
 
 Plus a resource, `ntl://schema/postgres`, serving the reference DDL — useful
 for an agent about to write a migration.
@@ -127,10 +127,10 @@ functions without a pinned `search_path`, unindexed foreign keys, missing
 primary keys, unused indexes, bloat — and every finding carries a remediation.
 A finding an operator cannot act on is noise.
 
-Note what it deliberately does *not* do: no check requires a sequential scan of
+Note what it deliberately does _not_ do: no check requires a sequential scan of
 user data. An advisory pass must not itself be the incident.
 
-`ntl_get_learning_health` is worth copying for its *shape* rather than its
+`ntl_get_learning_health` is worth copying for its _shape_ rather than its
 content: it does not just return numbers, it interprets them. Exploration at
 zero across multiple peers means the node has stopped learning. Pending near
 100% means no receipts are arriving and the weights reflect nothing. An agent
@@ -184,8 +184,8 @@ database.
 
 ### Connect as a role that cannot write
 
-Read-only transactions bound what the *SQL* can do. They say nothing about what
-the *role* can do, so a bug in this server is still bounded by the grants on the
+Read-only transactions bound what the _SQL_ can do. They say nothing about what
+the _role_ can do, so a bug in this server is still bounded by the grants on the
 credentials you hand it. Give the read-only deployment a role with no write
 grants:
 
@@ -218,11 +218,11 @@ cp -r mcp/ntl-postgres-mcp-server my-mcp-server
 
 Three files to change:
 
-| File | What to do |
-|---|---|
-| `src/db.ts` | Implement `SqlExecutor` for your driver. Four methods. |
+| File               | What to do                                                  |
+| ------------------ | ----------------------------------------------------------- |
+| `src/db.ts`        | Implement `SqlExecutor` for your driver. Four methods.      |
 | `src/tools/ntl.ts` | Replace with your domain tools. Delete what does not apply. |
-| `wrangler.toml` | Swap the Hyperdrive binding for what your database needs. |
+| `wrangler.toml`    | Swap the Hyperdrive binding for what your database needs.   |
 
 Largely portable as-is: `src/safety.ts`, `src/format.ts`, `src/index.ts`,
 `src/tools/schema.ts`, `src/tools/sql.ts`, and the whole test harness.
@@ -271,10 +271,10 @@ Both were invisible to a single-backend suite.
 
 ### Layers
 
-| File | Covers |
-|---|---|
-| `test/safety.test.ts` | Read-only bypasses, identifier injection, rollback |
-| `test/tools.test.ts` | Every tool against a real seeded schema |
+| File                    | Covers                                                         |
+| ----------------------- | -------------------------------------------------------------- |
+| `test/safety.test.ts`   | Read-only bypasses, identifier injection, rollback             |
+| `test/tools.test.ts`    | Every tool against a real seeded schema                        |
 | `test/protocol.test.ts` | The real MCP client, transport, schema validation, annotations |
 
 The protocol layer is worth testing separately: a tool can be perfectly correct

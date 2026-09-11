@@ -5,6 +5,7 @@ description: "Normative specification for NTL's activation gate: potential accum
 "og:description": "Formal specification for threshold-based signal processing and activation functions in NTL nodes."
 "twitter:title": "NTL Activation Model Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -35,7 +36,7 @@ ActivationState {
    [Queue Management](#queue-management)).
 5. If `potential >= threshold` AND the node is not in its refractory period:
    a. The node **fires**, draining a batch from the queue
-      ([What Firing Processes](#what-firing-processes)).
+   ([What Firing Processes](#what-firing-processes)).
    b. Potential resets to `0.0`.
    c. The node enters its refractory period.
 6. Otherwise no processing occurs; the signal waits in the queue.
@@ -123,12 +124,12 @@ sustain — and a self-inflicted one.
 
 The refractory period MUST therefore be configured per node class:
 
-| Node class | Default `refractory_period_ms` | Rationale |
-|---|---|---|
-| `edge` | `10` | Protects a battery- and CPU-constrained device; 100 fires/s is ample |
-| `standard` | `1` | Balanced default for a general-purpose node |
-| `server` | `0` | No artificial ceiling; backpressure comes from the dynamic threshold |
-| `infrastructure` | `0` | As `server`, with a larger queue |
+| Node class       | Default `refractory_period_ms` | Rationale                                                            |
+| ---------------- | ------------------------------ | -------------------------------------------------------------------- |
+| `edge`           | `10`                           | Protects a battery- and CPU-constrained device; 100 fires/s is ample |
+| `standard`       | `1`                            | Balanced default for a general-purpose node                          |
+| `server`         | `0`                            | No artificial ceiling; backpressure comes from the dynamic threshold |
+| `infrastructure` | `0`                            | As `server`, with a larger queue                                     |
 
 A value of `0` disables the refractory period. This is legitimate on
 server-class nodes: the dynamic threshold and the bounded queue already
@@ -155,11 +156,11 @@ against this bound, and is therefore always in `[0, 1]`.
 When a signal arrives at a full queue, the node MUST apply its configured
 `overflow_policy`:
 
-| Policy | Behaviour |
-|---|---|
+| Policy                         | Behaviour                                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `drop_lowest_weight` (default) | Compare the arriving signal against the lowest-weight queued signal. The lower-weight of the two is dropped. Ties drop the arriving signal. |
-| `drop_newest` | Drop the arriving signal. |
-| `drop_oldest` | Drop the *earliest-enqueued* queued signal, admit the arriving one. |
+| `drop_newest`                  | Drop the arriving signal.                                                                                                                   |
+| `drop_oldest`                  | Drop the _earliest-enqueued_ queued signal, admit the arriving one.                                                                         |
 
 `drop_lowest_weight` is the default because it preserves the protocol's own
 priority semantics: weight already means importance everywhere else, and
@@ -197,7 +198,7 @@ has nothing to do with why this signal was turned away: a node MUST process it
 and MUST NOT report the refused signal as also handled — those are
 contradictory outcomes for one signal.
 
-This holds for the *displaced* signal as much as the refused arrival. Under
+This holds for the _displaced_ signal as much as the refused arrival. Under
 `drop_lowest_weight` and `drop_oldest` the signal dropped is usually **not**
 the one that just arrived, and it came from a different peer — so the receipt
 goes to a different origin, over a different synapse, and cannot be inferred
@@ -218,11 +219,11 @@ counter so this is visible rather than inferred.
 
 Implementations MUST support the `step` activation function. Implementations SHOULD support `sigmoid` and `leaky` functions.
 
-| Function | Behavior |
-|---|---|
-| Step | Binary: fires when potential >= threshold |
-| Sigmoid | Probabilistic: firing probability increases smoothly |
-| Leaky | Always passes a small fraction (leak rate = 0.01) |
+| Function | Behavior                                             |
+| -------- | ---------------------------------------------------- |
+| Step     | Binary: fires when potential >= threshold            |
+| Sigmoid  | Probabilistic: firing probability increases smoothly |
+| Leaky    | Always passes a small fraction (leak rate = 0.01)    |
 
 ## Configuration
 
@@ -242,12 +243,12 @@ overflow_policy = "drop_lowest_weight"   # REQUIRED
 
 Defaults by node class:
 
-| Parameter | `edge` | `standard` | `server` | `infrastructure` |
-|---|---|---|---|---|
-| `refractory_period_ms` | `10` | `1` | `0` | `0` |
-| `fire_batch_size` | `8` | `16` | `64` | `128` |
-| `max_queue_depth` | `256` | `1024` | `8192` | `32768` |
-| `max_potential` | `10.0` | `10.0` | `50.0` | `100.0` |
+| Parameter              | `edge` | `standard` | `server` | `infrastructure` |
+| ---------------------- | ------ | ---------- | -------- | ---------------- |
+| `refractory_period_ms` | `10`   | `1`        | `0`      | `0`              |
+| `fire_batch_size`      | `8`    | `16`       | `64`     | `128`            |
+| `max_queue_depth`      | `256`  | `1024`     | `8192`   | `32768`          |
+| `max_potential`        | `10.0` | `10.0`     | `50.0`   | `100.0`          |
 
 ## Persistence
 

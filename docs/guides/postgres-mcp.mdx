@@ -46,27 +46,27 @@ The tool shows both.
 
 Read-only, always available:
 
-| Tool | Answers |
-|---|---|
-| `ntl_list_synapses` | What has the node learned? |
-| `ntl_get_learning_health` | Is it still learning? |
-| `ntl_list_journal` | Which routing decisions were made, and how did they turn out? |
-| `ntl_get_node_status` | Identity, topology, activation, dedup |
-| `ntl_list_tables` | Tables, row estimates, sizes, columns |
-| `ntl_list_extensions` | Installed and available extensions |
-| `ntl_list_migrations` | What has been applied |
-| `ntl_generate_typescript_types` | TypeScript interfaces for the live schema |
-| `ntl_execute_sql` | Arbitrary SQL, read-only by default |
-| `ntl_get_advisors` | Security and performance lint, with remediations |
-| `ntl_get_activity` | Live connections and slowest statements |
-| `ntl_search_docs` | openNTL docs, indexed offline |
+| Tool                            | Answers                                                       |
+| ------------------------------- | ------------------------------------------------------------- |
+| `ntl_list_synapses`             | What has the node learned?                                    |
+| `ntl_get_learning_health`       | Is it still learning?                                         |
+| `ntl_list_journal`              | Which routing decisions were made, and how did they turn out? |
+| `ntl_get_node_status`           | Identity, topology, activation, dedup                         |
+| `ntl_list_tables`               | Tables, row estimates, sizes, columns                         |
+| `ntl_list_extensions`           | Installed and available extensions                            |
+| `ntl_list_migrations`           | What has been applied                                         |
+| `ntl_generate_typescript_types` | TypeScript interfaces for the live schema                     |
+| `ntl_execute_sql`               | Arbitrary SQL, read-only by default                           |
+| `ntl_get_advisors`              | Security and performance lint, with remediations              |
+| `ntl_get_activity`              | Live connections and slowest statements                       |
+| `ntl_search_docs`               | openNTL docs, indexed offline                                 |
 
 Write tools appear only when an operator enables them:
 
-| Tool | Does |
-|---|---|
+| Tool                  | Does                                                   |
+| --------------------- | ------------------------------------------------------ |
 | `ntl_apply_migration` | Applies DDL in one transaction, records it in a ledger |
-| `ntl_init_schema` | Creates the openNTL schema. Idempotent. |
+| `ntl_init_schema`     | Creates the openNTL schema. Idempotent.                |
 
 ## The safety model
 
@@ -182,11 +182,11 @@ cp -r mcp/ntl-postgres-mcp-server my-mcp-server
 
 Three files change; the rest carries over.
 
-| Change | Why |
-|---|---|
-| `src/db.ts` | Implement `SqlExecutor` for your driver — four methods |
-| `src/tools/ntl.ts` | Replace with your domain tools |
-| `wrangler.toml` | Swap the Hyperdrive binding |
+| Change             | Why                                                    |
+| ------------------ | ------------------------------------------------------ |
+| `src/db.ts`        | Implement `SqlExecutor` for your driver — four methods |
+| `src/tools/ntl.ts` | Replace with your domain tools                         |
+| `wrangler.toml`    | Swap the Hyperdrive binding                            |
 
 Portable as-is: the safety layer, formatting and truncation, the Worker entry
 point with auth, the schema and SQL tools, and the whole test harness.

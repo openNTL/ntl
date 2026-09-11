@@ -29,25 +29,25 @@ PyTorch implements five neural principles. NTL implements twelve.
 
 ### Principles 1-5: What PyTorch Does
 
-| # | Principle | PyTorch | NTL |
-|---|-----------|---------|-----|
-| 1 | Weighted graph | Neurons + weighted edges | Nodes + weighted synapses |
-| 2 | Forward propagation | Input → layers → output | Emit → synapses → activation |
-| 3 | Junction transformation | Layer functions (ReLU, matmul) | Synapse functions (PII strip, anonymise) |
-| 4 | Learning | Backpropagation + gradient descent | Hebbian + gradient + spike-timing |
-| 5 | Improvement over time | Training makes model better | Traffic makes routing smarter |
+| #   | Principle               | PyTorch                            | NTL                                      |
+| --- | ----------------------- | ---------------------------------- | ---------------------------------------- |
+| 1   | Weighted graph          | Neurons + weighted edges           | Nodes + weighted synapses                |
+| 2   | Forward propagation     | Input → layers → output            | Emit → synapses → activation             |
+| 3   | Junction transformation | Layer functions (ReLU, matmul)     | Synapse functions (PII strip, anonymise) |
+| 4   | Learning                | Backpropagation + gradient descent | Hebbian + gradient + spike-timing        |
+| 5   | Improvement over time   | Training makes model better        | Traffic makes routing smarter            |
 
 ### Principles 6-12: What NTL Adds
 
-| # | Principle | What It Means for NTL |
-|---|-----------|----------------------|
-| 6 | Inhibition | High-priority signals suppress low-priority. Financial transactions dampen analytics noise. |
-| 7 | Recurrence | Feedback loops keep context alive. Updates circulate rather than fire-and-forget. |
-| 8 | Neuromodulation | Meta-signals change network-wide behaviour. "High load" reduces global sensitivity. |
-| 9 | Rich plasticity | Timing matters for learning. New connections form where useful. Dead connections pruned. |
-| 10 | Hierarchical processing | Raw data, patterns, and recommendations processed at multiple levels simultaneously. |
-| 11 | Sparse activation | Most nodes dormant. Near-zero power when idle. Only active paths consume resources. |
-| 12 | Multi-scale temporality | Millisecond routing, minute adaptation, hour learning, week topology evolution. |
+| #   | Principle               | What It Means for NTL                                                                       |
+| --- | ----------------------- | ------------------------------------------------------------------------------------------- |
+| 6   | Inhibition              | High-priority signals suppress low-priority. Financial transactions dampen analytics noise. |
+| 7   | Recurrence              | Feedback loops keep context alive. Updates circulate rather than fire-and-forget.           |
+| 8   | Neuromodulation         | Meta-signals change network-wide behaviour. "High load" reduces global sensitivity.         |
+| 9   | Rich plasticity         | Timing matters for learning. New connections form where useful. Dead connections pruned.    |
+| 10  | Hierarchical processing | Raw data, patterns, and recommendations processed at multiple levels simultaneously.        |
+| 11  | Sparse activation       | Most nodes dormant. Near-zero power when idle. Only active paths consume resources.         |
+| 12  | Multi-scale temporality | Millisecond routing, minute adaptation, hour learning, week topology evolution.             |
 
 PyTorch simplified to five because it optimised for GPU computation. NTL runs on infrastructure with access to neural hardware and can implement the full repertoire.
 
@@ -55,24 +55,24 @@ PyTorch simplified to five because it optimised for GPU computation. NTL runs on
 
 ## The Complete Mapping
 
-| Concept | PyTorch / TensorFlow | NTL |
-|---------|---------------------|-----|
-| Node | Neuron (math function) | Infrastructure node (device, DB, service) |
-| Connection | Weighted edge | Synapse (weighted, transforming, learning) |
-| Signal | Activation tensor | Data signal (mutation, event, context) |
-| Weight | Learned parameter | Synapse weight |
-| Forward pass | Input → layers → output | Emit → synapses → activation |
-| Transformation | Layer function | Synapse function |
-| Learning rule | Backprop + SGD | Hebbian + gradient + spike-timing |
-| Loss function | Error vs desired output | Delivery success vs intent |
-| Batch | Training samples | Signals in time window |
-| Epoch | Pass through training data | Learning cycle across synapses |
-| Inference | Trained model on new input | Mature network routing new signals |
-| Training | Weight adjustment | Traffic adjusts synapse weights |
-| Overfitting | Memorises training data | Over-specialises to current traffic |
-| Regularisation | Dropout, weight decay | Synapse decay, min weight thresholds |
-| Transfer learning | Pre-trained weights for new task | Pre-trained topology for new deployment |
-| Hardware | GPU (CUDA, ROCm) | NPU (Neural Engine, Hexagon, Da Vinci) |
+| Concept           | PyTorch / TensorFlow             | NTL                                        |
+| ----------------- | -------------------------------- | ------------------------------------------ |
+| Node              | Neuron (math function)           | Infrastructure node (device, DB, service)  |
+| Connection        | Weighted edge                    | Synapse (weighted, transforming, learning) |
+| Signal            | Activation tensor                | Data signal (mutation, event, context)     |
+| Weight            | Learned parameter                | Synapse weight                             |
+| Forward pass      | Input → layers → output          | Emit → synapses → activation               |
+| Transformation    | Layer function                   | Synapse function                           |
+| Learning rule     | Backprop + SGD                   | Hebbian + gradient + spike-timing          |
+| Loss function     | Error vs desired output          | Delivery success vs intent                 |
+| Batch             | Training samples                 | Signals in time window                     |
+| Epoch             | Pass through training data       | Learning cycle across synapses             |
+| Inference         | Trained model on new input       | Mature network routing new signals         |
+| Training          | Weight adjustment                | Traffic adjusts synapse weights            |
+| Overfitting       | Memorises training data          | Over-specialises to current traffic        |
+| Regularisation    | Dropout, weight decay            | Synapse decay, min weight thresholds       |
+| Transfer learning | Pre-trained weights for new task | Pre-trained topology for new deployment    |
+| Hardware          | GPU (CUDA, ROCm)                 | NPU (Neural Engine, Hexagon, Da Vinci)     |
 
 ---
 
@@ -87,18 +87,18 @@ including the one in a $5 microcontroller.
 This is the honest framing, and it is the stronger claim: NTL runs
 everywhere, with no accelerator required.
 
-Neural silicon is therefore an *option*, not a dependency:
+Neural silicon is therefore an _option_, not a dependency:
 
-| Device | NPU | TOPS |
-|--------|-----|------|
-| iPhone (A14+) | Apple Neural Engine | 15.8 |
-| Snapdragon 8 Gen 2+ | Qualcomm Hexagon | 12.4 |
-| Exynos 2400+ | Samsung NPU | 14.7 |
-| Kirin 9000+ | Huawei Da Vinci | 8.0 |
+| Device              | NPU                 | TOPS |
+| ------------------- | ------------------- | ---- |
+| iPhone (A14+)       | Apple Neural Engine | 15.8 |
+| Snapdragon 8 Gen 2+ | Qualcomm Hexagon    | 12.4 |
+| Exynos 2400+        | Samsung NPU         | 14.7 |
+| Kirin 9000+         | Huawei Da Vinci     | 8.0  |
 
-*These figures describe the silicon's peak throughput, not NTL's need for
+_These figures describe the silicon's peak throughput, not NTL's need for
 it. A thousand-parameter model does not require 15 TOPS, and the table
-should not be read as implying otherwise.*
+should not be read as implying otherwise._
 
 <Note>
 **Two honest caveats.** First, at this model size an NPU offers no
@@ -108,10 +108,11 @@ mobile operating systems restrict NPU access from background processes,
 which is exactly where a transport layer runs; on iOS and Android a
 background NTL node should not expect NPU access at all.
 
-The upside is real but bounded: where a node *does* have accessible neural
+The upside is real but bounded: where a node _does_ have accessible neural
 silicon and a much larger learned model — learned transformations rather
 than path scoring — that hardware becomes useful. Today it is not
 load-bearing, and NTL's viability does not rest on it.
+
 </Note>
 
 Earlier drafts of this document claimed NPU usage as a differentiator
@@ -152,12 +153,12 @@ only appears to learn. The Receipt type and the reward table in
 
 The same loop, over four different backing systems:
 
-| System | Producer | Outcome signal |
-|---|---|---|
-| **PostgreSQL** | Logical replication slot | Apply confirmation / conflict |
-| **Any HTTP service** | Webhook or API call | 2xx / 4xx / 5xx via a Web2 adapter |
-| **Message queue** | Published message | Consumer ack / nack |
-| **Graph sync protocol** | Graph mutation | Sync success / conflict / failure |
+| System                  | Producer                 | Outcome signal                     |
+| ----------------------- | ------------------------ | ---------------------------------- |
+| **PostgreSQL**          | Logical replication slot | Apply confirmation / conflict      |
+| **Any HTTP service**    | Webhook or API call      | 2xx / 4xx / 5xx via a Web2 adapter |
+| **Message queue**       | Published message        | Consumer ack / nack                |
+| **Graph sync protocol** | Graph mutation           | Sync success / conflict / failure  |
 
 The last row is where SiafuDB's Graph Sync Protocol fits — a good worked
 example because its conflict outcome is richer than a bare success/failure,
@@ -168,7 +169,7 @@ pattern, not the pattern itself.
 
 A binary success/failure signal teaches less than a graded one. A conflict
 outcome says "the path worked but the write lost a race" — which should not
-penalise the *route*. Adapters SHOULD map their layer's outcome vocabulary
+penalise the _route_. Adapters SHOULD map their layer's outcome vocabulary
 onto NTL's reward table deliberately rather than collapsing everything to
 success or failure, since a mis-mapped outcome trains the model toward the
 wrong thing.
@@ -180,6 +181,7 @@ wrong thing.
 ### 1. ML Analysis Tools Apply
 
 NTL's topology is a neural network. ML analysis tools work on it:
+
 - Weight distribution visualisation (strong vs weak synapses)
 - Activation maps (which nodes are active)
 - Dead neuron detection (unreachable nodes)
@@ -187,14 +189,14 @@ NTL's topology is a neural network. ML analysis tools work on it:
 
 ### 2. Hyperparameters Need Tuning
 
-| ML Hyperparameter | NTL Equivalent |
-|-------------------|---------------|
-| Learning rate | Hebbian rate on synapses |
-| Weight decay | Synapse decay half-life |
-| Batch size | Signal aggregation window |
-| Dropout | Random synapse deactivation |
-| Network depth | Maximum hop count |
-| Activation threshold | Node activation threshold |
+| ML Hyperparameter    | NTL Equivalent              |
+| -------------------- | --------------------------- |
+| Learning rate        | Hebbian rate on synapses    |
+| Weight decay         | Synapse decay half-life     |
+| Batch size           | Signal aggregation window   |
+| Dropout              | Random synapse deactivation |
+| Network depth        | Maximum hop count           |
+| Activation threshold | Node activation threshold   |
 
 Different deployments need different hyperparameters: a high-traffic
 application deployment is not a low-traffic IoT mesh. Defaults per
@@ -222,16 +224,16 @@ modes. They are enumerated here, and specified normatively in
 [spec/learning-model](/spec/learning-model) §7 and
 [spec/threat-model](/spec/threat-model).
 
-| Failure | ML name | What it looks like in NTL | Mitigation |
-|---|---|---|---|
-| Ossified routing | Insufficient exploration | Greedy top-N selection starves unselected paths; a synapse never chosen is never rewarded, so it only decays | Stochastic (softmax) selection with a temperature floor — [learning-model §4](/spec/learning-model) |
-| Weight saturation | Unbounded weights | Additive updates push every synapse to `max_weight`; scoring stops discriminating and routing degenerates to flooding | Divisive normalisation of total outbound weight — [learning-model §2.3](/spec/learning-model) |
-| Weight poisoning | Data poisoning | An attacker spams traffic to steer a victim's weights toward their own nodes | Per-identity influence caps, persisted and asymmetric — [threat-model §1](/spec/threat-model) |
-| Forged rewards | Label poisoning | Fabricated positive receipts teach the model that a bad path is good | Receipts must be signed and must match a journalled decision — [threat-model §2](/spec/threat-model) |
-| Reward starvation | Missing labels | Nothing emits receipts, so every decision stays `pending` and no weight ever moves | Timeouts are a real (weak) negative reward; operators alert on the pending fraction |
-| Over-specialisation | Overfitting | Topology tunes to current traffic and routes new patterns badly | Mandatory decay; continued exploration |
-| Stale confidence | Distribution shift | Weights outlive the topology they described | Half-life decay — [learning-model §3](/spec/learning-model) |
-| Thrash on lossy links | Label noise | Packet loss is read as routing failure, and the model oscillates | Timeout penalised more weakly than explicit rejection |
+| Failure               | ML name                  | What it looks like in NTL                                                                                             | Mitigation                                                                                           |
+| --------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Ossified routing      | Insufficient exploration | Greedy top-N selection starves unselected paths; a synapse never chosen is never rewarded, so it only decays          | Stochastic (softmax) selection with a temperature floor — [learning-model §4](/spec/learning-model)  |
+| Weight saturation     | Unbounded weights        | Additive updates push every synapse to `max_weight`; scoring stops discriminating and routing degenerates to flooding | Divisive normalisation of total outbound weight — [learning-model §2.3](/spec/learning-model)        |
+| Weight poisoning      | Data poisoning           | An attacker spams traffic to steer a victim's weights toward their own nodes                                          | Per-identity influence caps, persisted and asymmetric — [threat-model §1](/spec/threat-model)        |
+| Forged rewards        | Label poisoning          | Fabricated positive receipts teach the model that a bad path is good                                                  | Receipts must be signed and must match a journalled decision — [threat-model §2](/spec/threat-model) |
+| Reward starvation     | Missing labels           | Nothing emits receipts, so every decision stays `pending` and no weight ever moves                                    | Timeouts are a real (weak) negative reward; operators alert on the pending fraction                  |
+| Over-specialisation   | Overfitting              | Topology tunes to current traffic and routes new patterns badly                                                       | Mandatory decay; continued exploration                                                               |
+| Stale confidence      | Distribution shift       | Weights outlive the topology they described                                                                           | Half-life decay — [learning-model §3](/spec/learning-model)                                          |
+| Thrash on lossy links | Label noise              | Packet loss is read as routing failure, and the model oscillates                                                      | Timeout penalised more weakly than explicit rejection                                                |
 
 Two of these deserve emphasis, because they were latent in the original
 design rather than hypothetical: **ossified routing** followed directly from
@@ -247,8 +249,8 @@ difference between a research claim and an engineering one.
 ## What This Changes
 
 NTL is not a messaging protocol with ML features bolted on. The routing model
-*is* a learned model, the traffic *is* its training data, and the delivery
-outcomes *are* its labels.
+_is_ a learned model, the traffic _is_ its training data, and the delivery
+outcomes _are_ its labels.
 
 The claim stops there, deliberately. NTL's routing is a small online
 learner — a contextual bandit over synapses — not a deep network, and it
@@ -265,7 +267,7 @@ This breaks conventional thinking because:
   receipts.
 
 - **Infrastructure and ML are treated as separate fields.** NTL puts the
-  model *in* the infrastructure: the traffic is the training data and the
+  model _in_ the infrastructure: the traffic is the training data and the
   routing decision is the inference. This is not a new idea — Q-routing
   demonstrated it in 1994 (see [research/07](/research/07-prior-art)) —
   but it has not been carried into a general-purpose transport layer with
@@ -279,9 +281,9 @@ lineage it comes from.
 
 ---
 
-*Machine Learning at the Transfer Layer — April 2026 — The Bundu Foundation*
+_Machine Learning at the Transfer Layer — April 2026 — The Bundu Foundation_
 
-*"PyTorch taught computers to think. NTL teaches networks to learn."*
+_"PyTorch taught computers to think. NTL teaches networks to learn."_
 
-*See also: [spec/learning-model](/spec/learning-model) for the normative
-rules, and [research/07-prior-art](/research/07-prior-art) for the lineage.*
+_See also: [spec/learning-model](/spec/learning-model) for the normative
+rules, and [research/07-prior-art](/research/07-prior-art) for the lineage._

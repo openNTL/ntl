@@ -5,6 +5,7 @@ description: "NTL treats cryptography as a swappable module rather than a baked-
 "og:description": "NTL's approach to cryptographic agility — cryptography as a swappable module, not a hardcoded foundation."
 "twitter:title": "NTL Pluggable Cryptography"
 ---
+
 NTL's most important security design decision: **cryptography is a module, not a foundation.**
 
 ## The Problem with Hardcoded Crypto
@@ -58,12 +59,12 @@ trait CryptoModule: Send + Sync {
 
 NTL ships with a default `PostQuantumModule` that uses:
 
-| Operation | Algorithm | Standard |
-|---|---|---|
-| Signatures | CRYSTALS-Dilithium | NIST PQC |
-| Key Exchange | CRYSTALS-Kyber | NIST PQC |
-| Encryption | AES-256-GCM (symmetric) | NIST |
-| Hashing | BLAKE3 | — |
+| Operation    | Algorithm               | Standard |
+| ------------ | ----------------------- | -------- |
+| Signatures   | CRYSTALS-Dilithium      | NIST PQC |
+| Key Exchange | CRYSTALS-Kyber          | NIST PQC |
+| Encryption   | AES-256-GCM (symmetric) | NIST     |
+| Hashing      | BLAKE3                  | —        |
 
 These are the current NIST Post-Quantum Cryptography standards. When they're superseded, a new module is published — the protocol doesn't change.
 
@@ -73,10 +74,11 @@ These are the current NIST Post-Quantum Cryptography standards. When they're sup
   key agreement, BLAKE3 hashing. See
   [spec/crypto-interface](/spec/crypto-interface) for the full status table.
 
-  A node configured for a module this build cannot provide **fails to start**,
-  naming the modules it does support. It does not silently fall back: an
-  operator who asked for post-quantum signing and got Ed25519 has been told the
-  opposite of the truth about their deployment's confidentiality horizon.
+A node configured for a module this build cannot provide **fails to start**,
+naming the modules it does support. It does not silently fall back: an
+operator who asked for post-quantum signing and got Ed25519 has been told the
+opposite of the truth about their deployment's confidentiality horizon.
+
 </Warning>
 
 ## Swapping Modules

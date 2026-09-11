@@ -6,6 +6,7 @@ mode: "wide"
 "og:description": "Explore NTL's four-layer architecture: Signal Layer, Synapse Layer, Propagation Engine, and Adapter Edge."
 "twitter:title": "NTL Architecture"
 ---
+
 NTL is composed of four layers: the **Signal Layer**, the **Synapse Layer**, the **Propagation Engine**, and the **Adapter Edge**.
 
 ## System Architecture
@@ -91,12 +92,12 @@ deduplication cache, activation state, and the learning journal — is reached
 through the [storage interface](/spec/storage-interface). Any backend
 satisfying that contract is conforming.
 
-| Backend | Deployment | Status |
-|---|---|---|
-| SQLite | Edge nodes (default) and full nodes | Shipping |
-| PostgreSQL | Full nodes | Planned |
-| Graph databases | Graph-native deployments | Via the same trait |
-| KV stores | Dedup cache and hot state | Via the same trait |
+| Backend         | Deployment                          | Status             |
+| --------------- | ----------------------------------- | ------------------ |
+| SQLite          | Edge nodes (default) and full nodes | Shipping           |
+| PostgreSQL      | Full nodes                          | Planned            |
+| Graph databases | Graph-native deployments            | Via the same trait |
+| KV stores       | Dedup cache and hot state           | Via the same trait |
 
 SQLite is the default because it needs no configuration and runs on
 constrained devices — which is the edge story, not a compromise on it.

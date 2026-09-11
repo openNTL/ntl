@@ -5,6 +5,7 @@ description: "The signal is NTL's fundamental unit, replacing the request. What 
 "og:description": "Signals are the fundamental data unit in NTL, replacing requests, messages, and events from traditional protocols."
 "twitter:title": "NTL Signals"
 ---
+
 A **signal** is the fundamental data unit in NTL. It replaces the concept of a "request," "message," or "event" from traditional protocols.
 
 ## What is a Signal?
@@ -53,15 +54,15 @@ struct Signal {
 
 Signals are strongly typed. The type determines how the propagation engine handles routing and how receiving nodes process the signal.
 
-| Type | Description | Use Case |
-|---|---|---|
-| `Data` | Carries a data payload | Transferring state, content, records |
-| `Query` | Requests data from the network | Discovering information, search |
-| `Event` | Notifies of a state change | Real-time updates, triggers |
-| `Command` | Requests an action | Remote execution, orchestration |
-| `Heartbeat` | Maintains synapse liveness | Health checks, presence |
-| `Discovery` | Announces capability | Service registration, topology |
-| `Ack` | Confirms signal receipt | Delivery guarantees |
+| Type        | Description                    | Use Case                             |
+| ----------- | ------------------------------ | ------------------------------------ |
+| `Data`      | Carries a data payload         | Transferring state, content, records |
+| `Query`     | Requests data from the network | Discovering information, search      |
+| `Event`     | Notifies of a state change     | Real-time updates, triggers          |
+| `Command`   | Requests an action             | Remote execution, orchestration      |
+| `Heartbeat` | Maintains synapse liveness     | Health checks, presence              |
+| `Discovery` | Announces capability           | Service registration, topology       |
+| `Ack`       | Confirms signal receipt        | Delivery guarantees                  |
 
 ### Custom Types
 

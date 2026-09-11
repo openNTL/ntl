@@ -4,7 +4,7 @@
 
 **Do not open a public issue for security vulnerabilities.**
 
-Report vulnerabilities privately to **security@openntl.org**. Include:
+Report vulnerabilities privately to **<security@openntl.org>**. Include:
 
 - A description of the issue and its impact
 - Steps to reproduce, or a proof of concept
@@ -21,11 +21,11 @@ ask us not to.
 NTL is a protocol project with a reference implementation. Both are in
 scope:
 
-| Area | Examples |
-|---|---|
-| Specification | Attacks the protocol permits by design; ambiguities that lead implementers into insecure behaviour |
+| Area                     | Examples                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Specification            | Attacks the protocol permits by design; ambiguities that lead implementers into insecure behaviour           |
 | Reference implementation | Memory safety, signature verification bypass, panics reachable from untrusted input, storage-layer injection |
-| Learned routing | Weight poisoning, Sybil influence, eclipse attacks on topology knowledge |
+| Learned routing          | Weight poisoning, Sybil influence, eclipse attacks on topology knowledge                                     |
 
 The **threat model** is normative and lives at
 [spec/threat-model](https://openntl.org/spec/threat-model). Read it before
@@ -39,9 +39,9 @@ triaged as a roadmap item rather than a vulnerability.
 NTL has not yet reached a stable release. Until v1.0, only the `main`
 branch receives security fixes.
 
-| Version | Supported |
-|---|---|
-| `main` | Yes |
+| Version       | Supported              |
+| ------------- | ---------------------- |
+| `main`        | Yes                    |
 | Pre-v1.0 tags | No — upgrade to `main` |
 
 ## Cryptography
@@ -50,7 +50,7 @@ NTL ships pluggable cryptography with post-quantum defaults. See
 [spec/crypto-interface](https://openntl.org/spec/crypto-interface) and
 [security/post-quantum](https://openntl.org/security/post-quantum).
 
-Weaknesses in a *pluggable module* that NTL merely offers as an option are
+Weaknesses in a _pluggable module_ that NTL merely offers as an option are
 in scope for documentation fixes and default changes. Weaknesses in the
 underlying primitives (e.g. a break in ML-DSA) should be reported upstream;
 tell us too, so we can change defaults.

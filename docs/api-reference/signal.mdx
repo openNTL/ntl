@@ -5,6 +5,7 @@ description: "Rust API for NTL signals: the builder, signal types, propagation s
 "og:description": "API reference for NTL signal creation, types, encoding, and constructors."
 "twitter:title": "NTL Signal API"
 ---
+
 Signals are the fundamental data unit in NTL. This page documents
 `ntl_core::signal` — note the underscore: the crate is `ntl_core`, not `ntl`.
 
@@ -52,16 +53,16 @@ rng)` so time and randomness stay injectable — or, in an application,
 
 ## Builder methods
 
-| Method | Argument | Default |
-|---|---|---|
-| `with_payload` | `serde_json::Value` | `Value::Null` |
-| `with_weight` | `f32`, clamped to `0.0..=1.0` | `0.5` |
-| `with_ttl` | `u16` hops | `10` |
-| `with_scope` | `PropagationScope` | `Weighted { min_synapse_weight: 0.0 }` |
-| `with_correlation` | `SignalId` | none |
-| `with_tags` | `Vec<&str>` | empty |
-| `with_delivery` | `DeliveryClass` | `BestEffort` |
-| `acknowledged` | — | shorthand for `with_delivery(Acknowledged)` |
+| Method             | Argument                      | Default                                     |
+| ------------------ | ----------------------------- | ------------------------------------------- |
+| `with_payload`     | `serde_json::Value`           | `Value::Null`                               |
+| `with_weight`      | `f32`, clamped to `0.0..=1.0` | `0.5`                                       |
+| `with_ttl`         | `u16` hops                    | `10`                                        |
+| `with_scope`       | `PropagationScope`            | `Weighted { min_synapse_weight: 0.0 }`      |
+| `with_correlation` | `SignalId`                    | none                                        |
+| `with_tags`        | `Vec<&str>`                   | empty                                       |
+| `with_delivery`    | `DeliveryClass`               | `BestEffort`                                |
+| `acknowledged`     | —                             | shorthand for `with_delivery(Acknowledged)` |
 
 Two behaviours are easy to get wrong from the signatures alone. `with_weight`
 **clamps** rather than rejecting, and the **topic is not a field** — it is
@@ -137,23 +138,23 @@ assert_eq!(reply.correlation_id, Some(request.id));
 
 The struct has fifteen public fields. All are `pub`; there are no accessors.
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `SignalId` | ULID, 16 bytes on the wire |
-| `signal_type` | `SignalType` | Type classification |
-| `version` | `u8` | Protocol version, currently `1` |
-| `origin` | `NodeId` | Emitting node, stamped by `emit` |
-| `signature` | `Vec<u8>` | Origin signature over `signing_bytes()` |
-| `timestamp` | `u64` | Emission time, nanoseconds since the epoch |
-| `payload` | `serde_json::Value` | Signal data |
-| `encoding` | `Encoding` | `Cbor`, `Protobuf` or `Raw` |
-| `weight` | `f32` | Priority, `0.0`–`1.0` |
-| `ttl` | `u16` | Remaining hops |
-| `scope` | `PropagationScope` | How it routes |
-| `correlation_id` | `Option<SignalId>` | Request-response link |
-| `trace` | `Vec<NodeId>` | Path travelled, capped at 64 entries |
-| `tags` | `Vec<String>` | Searchable tags, topic first |
-| `delivery` | `DeliveryClass` | `BestEffort` or `Acknowledged` |
+| Field            | Type                | Description                                |
+| ---------------- | ------------------- | ------------------------------------------ |
+| `id`             | `SignalId`          | ULID, 16 bytes on the wire                 |
+| `signal_type`    | `SignalType`        | Type classification                        |
+| `version`        | `u8`                | Protocol version, currently `1`            |
+| `origin`         | `NodeId`            | Emitting node, stamped by `emit`           |
+| `signature`      | `Vec<u8>`           | Origin signature over `signing_bytes()`    |
+| `timestamp`      | `u64`               | Emission time, nanoseconds since the epoch |
+| `payload`        | `serde_json::Value` | Signal data                                |
+| `encoding`       | `Encoding`          | `Cbor`, `Protobuf` or `Raw`                |
+| `weight`         | `f32`               | Priority, `0.0`–`1.0`                      |
+| `ttl`            | `u16`               | Remaining hops                             |
+| `scope`          | `PropagationScope`  | How it routes                              |
+| `correlation_id` | `Option<SignalId>`  | Request-response link                      |
+| `trace`          | `Vec<NodeId>`       | Path travelled, capped at 64 entries       |
+| `tags`           | `Vec<String>`       | Searchable tags, topic first               |
+| `delivery`       | `DeliveryClass`     | `BestEffort` or `Acknowledged`             |
 
 `emit` stamps identity, not a signature — `signature` comes back empty, and
 signing happens before transmission:
@@ -200,7 +201,7 @@ pub enum SignalType {
 
 The acknowledgement variant is `Receipt`, **not** `Ack`. It was named `Ack` in
 0.1.0-draft; the wire value is unchanged, but the type now carries a structured
-outcome, because a bare confirmation cannot say *why* a signal failed.
+outcome, because a bare confirmation cannot say _why_ a signal failed.
 
 `to_type_byte` and `from_type_byte` cross the wire. `Custom` is byte 15 and has
 no round trip: the discriminant alone does not carry the application-defined
@@ -241,8 +242,8 @@ pub enum PropagationScope {
 
 `Weighted { min_synapse_weight: 0.0 }` is the default. `Flood` is the one scope
 that ignores `max_fanout`, so `max_hops` is the only thing bounding total
-fan-out: a flood of depth *d* over nodes of degree *f* touches on the order of
-*f^d* synapses. Use it sparingly.
+fan-out: a flood of depth _d_ over nodes of degree _f_ touches on the order of
+_f^d_ synapses. Use it sparingly.
 
 ```rust
 let scopes = [
@@ -270,7 +271,7 @@ for scope in scopes {
 
 `BestEffort` may be silently absorbed below `min_propagation_weight`. That is
 fine for telemetry and disqualifying for anything with a side effect, so
-`Acknowledged` guarantees at-least-once delivery *or* a receipt saying it
+`Acknowledged` guarantees at-least-once delivery _or_ a receipt saying it
 failed.
 
 `Signal::receipt(&receipt, origin)` builds the reply: it correlates to the
@@ -358,12 +359,12 @@ payload or downgrade an acknowledged signal to best-effort without breaking it.
 Four fields are deliberately **excluded**, because propagation mutates them by
 design and a signature over them could not survive a single hop:
 
-| Excluded field | Mutated by |
-|---|---|
-| `signature` | the signature itself |
-| `trace` | each node appending its id |
-| `ttl` | each hop decrementing it |
-| `weight` | attenuation at each synapse |
+| Excluded field | Mutated by                  |
+| -------------- | --------------------------- |
+| `signature`    | the signature itself        |
+| `trace`        | each node appending its id  |
+| `ttl`          | each hop decrementing it    |
+| `weight`       | attenuation at each synapse |
 
 <Warning>
   The consequence is worth stating plainly: **an on-path node can inflate a

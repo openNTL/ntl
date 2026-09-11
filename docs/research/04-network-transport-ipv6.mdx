@@ -19,11 +19,11 @@ NTL's signal model requires any node to receive signals from any other node at a
 
 ### How NAT Breaks Signal Propagation
 
-| Workaround | Problem |
-|------------|---------|
-| Device initiates first | Contradicts activation model |
-| Relay server | Centralised, adds latency, single point of failure |
-| STUN/hole punching | 60-80% success, seconds of latency, coordination server needed |
+| Workaround             | Problem                                                        |
+| ---------------------- | -------------------------------------------------------------- |
+| Device initiates first | Contradicts activation model                                   |
+| Relay server           | Centralised, adds latency, single point of failure             |
+| STUN/hole punching     | 60-80% success, seconds of latency, coordination server needed |
 
 None are compatible with neural signal propagation at scale.
 
@@ -33,12 +33,12 @@ IPv6 gives every device a globally routable address. No NAT, no relay, no hole p
 
 ## Layered Requirements
 
-| Layer | Scope | IP Requirement |
-|-------|-------|---------------|
-| Channel | Same process | None |
-| Local | Same machine | None |
-| Network | Same LAN | IPv4 or IPv6 |
-| Fabric | Global | **IPv6 required** |
+| Layer   | Scope        | IP Requirement    |
+| ------- | ------------ | ----------------- |
+| Channel | Same process | None              |
+| Local   | Same machine | None              |
+| Network | Same LAN     | IPv4 or IPv6      |
+| Fabric  | Global       | **IPv6 required** |
 
 GSPA (API transport) works on IPv4 through traditional client-server model.
 
@@ -61,4 +61,4 @@ African mobile networks are deploying IPv6 faster than legacy Western networks �
 
 ---
 
-*April 2026 — The Bundu Foundation*
+_April 2026 — The Bundu Foundation_

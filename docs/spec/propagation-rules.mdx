@@ -5,6 +5,7 @@ description: "Normative rules for routing a signal through an NTL network: TTL, 
 "og:description": "Formal specification for how signals route through the NTL network based on synapse weight, activation, and topology."
 "twitter:title": "NTL Propagation Rules Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -65,14 +66,14 @@ is allocated for the frame. That is the ordering constraint that matters: it is
 the only cheap check standing between an attacker-supplied length and this
 node's memory.
 
-**Deduplication and TTL MUST be checked *after* verification.** 0.2.0-draft
-required the opposite — verification after size, TTL *and* dedup, to keep an
+**Deduplication and TTL MUST be checked _after_ verification.** 0.2.0-draft
+required the opposite — verification after size, TTL _and_ dedup, to keep an
 attacker from forcing signature work with malformed traffic. Implementing it
 showed the ordering costs more than it saves, in two specific ways:
 
 - **Deduplication is a write, not a read.** Claiming a signal identifier is
   what makes it a duplicate. Checking it before verification therefore lets
-  *unauthenticated* traffic occupy the dedup cache and suppress the genuine
+  _unauthenticated_ traffic occupy the dedup cache and suppress the genuine
   signal that follows — a cheaper and more damaging attack than the CPU cost
   the ordering was defending against, and one that costs the attacker nothing
   because the resulting timeouts apply negative weight updates the influence
@@ -134,6 +135,7 @@ receipt. See [learning-model](/spec/learning-model) §1.
 The signal MUST be propagated to ALL active synapses (excluding the synapse it arrived on). Used for discovery and emergency signals.
 
 **Constraints:**
+
 - Flood signals SHOULD have low TTL (≤ 3) to prevent network saturation
 - A node MUST NOT propagate a flood whose hop count has reached the scope's
   `max_hops`, and MUST still accept and process one that has. The bound is on
@@ -171,7 +173,7 @@ specified in [learning-model](/spec/learning-model) §4.2, along with the
 requirement that `τ` never reach zero.
 
 Synapses below `min_synapse_weight` remain excluded: exploration widens the
-choice among *eligible* paths, it does not override eligibility.
+choice among _eligible_ paths, it does not override eligibility.
 
 ### Targeted (scope = 2)
 
@@ -219,6 +221,7 @@ score = (synapse.weight * W_weight)
 ```
 
 Where:
+
 - `latency_score = 1.0 / (1.0 + normalized_latency)`
 - `type_affinity = historical_success_rate_for_signal_type`
 - `recency_score = 1.0 / (1.0 + hours_since_last_active)`
@@ -234,7 +237,7 @@ delivery outcomes rather than configured. The update rule, the decay
 half-life that keeps them current, the normalisation that keeps them
 bounded, and the per-identity caps that keep them honest are all specified
 in [learning-model](/spec/learning-model). This document specifies how
-weights are *used*; that one specifies how they *change*.
+weights are _used_; that one specifies how they _change_.
 
 ## Attenuation
 
@@ -262,12 +265,12 @@ the acknowledged class unusable at any distance.
 ## Trace Management
 
 When a node propagates a signal:
+
 1. The node MUST append its Node ID to the signal's trace
 2. The trace MUST NOT exceed 64 entries
 3. Nodes MAY truncate the oldest entries if the trace exceeds 64
 
 For privacy-sensitive deployments, trace recording MAY be disabled. In this case, loop prevention relies solely on the deduplication cache.
-
 
 ## Related
 

@@ -5,6 +5,7 @@ description: "Normative specification for NTL's pluggable cryptographic module: 
 "og:description": "Formal specification for NTL's pluggable cryptographic module, enabling algorithm-agile security."
 "twitter:title": "NTL Crypto Interface Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -44,17 +45,18 @@ CryptoModule {
 During synapse handshake, nodes exchange their supported crypto module IDs. The synapse MUST use a mutually supported module. If no common module exists, the synapse formation MUST fail.
 
 Priority order for module selection:
+
 1. Both nodes' preferred module (if same)
 2. Highest-versioned mutually supported module
 3. Failure (no common module)
 
 ## Modules
 
-| Module ID | Algorithms | Status | In the reference implementation |
-|---|---|---|---|
-| `classical-v1` | Ed25519 + X25519 + AES-256-GCM + BLAKE3 | REQUIRED | **Yes** — signing and verification |
-| `pq-v1` | Dilithium + Kyber + AES-256-GCM + BLAKE3 | RECOMMENDED | No |
-| `hybrid-v1` | Both PQ and classical (dual signatures) | OPTIONAL | No |
+| Module ID      | Algorithms                               | Status      | In the reference implementation    |
+| -------------- | ---------------------------------------- | ----------- | ---------------------------------- |
+| `classical-v1` | Ed25519 + X25519 + AES-256-GCM + BLAKE3  | REQUIRED    | **Yes** — signing and verification |
+| `pq-v1`        | Dilithium + Kyber + AES-256-GCM + BLAKE3 | RECOMMENDED | No                                 |
+| `hybrid-v1`    | Both PQ and classical (dual signatures)  | OPTIONAL    | No                                 |
 
 An implementation MUST provide `classical-v1` — it is the floor that makes two
 arbitrary nodes able to negotiate anything at all.
@@ -69,6 +71,7 @@ the opposite of the truth about their deployment's confidentiality horizon.
 
 The reference implementation enforces this in `NodeConfig::validate`, and
 `crypto::supported_modules()` is the single list it checks against.
+
 </Warning>
 
 The point of this interface is that the choice is not baked into the protocol —

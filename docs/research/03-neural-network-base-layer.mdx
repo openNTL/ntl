@@ -150,6 +150,7 @@ This is identical to transfer learning in ML: pre-trained weights provide a star
 ```
 
 Training and inference are separated:
+
 - **Inference** (routing each signal) runs on NPU — every signal, nanoseconds
 - **Training** (updating weights) runs on CPU — periodically, milliseconds
 
@@ -160,18 +161,23 @@ This separation matches how ML systems work in production: inference on accelera
 ## What This Enables That Simulation Cannot
 
 ### 1. Hardware acceleration
+
 Simulation runs on CPU. The neural model runs on NPU — faster and lower power.
 
 ### 2. Gradient-based learning
+
 Simulation implements hand-coded learning rules (Hebbian). The neural model can use any differentiable learning algorithm — SGD, Adam, reinforcement learning.
 
 ### 3. Context-aware routing
+
 Simulation evaluates `weight * signal_weight`. The neural model evaluates signal type, source, time, device state, receiver activity, and synapse history simultaneously.
 
 ### 4. Transfer learning
+
 Simulation learns from scratch on every deployment. The neural model can start from pre-trained weights.
 
 ### 5. Composable with ML ecosystem
+
 The routing model is an ONNX model. It can be analysed, visualised, and optimised with existing ML tools (TensorBoard, Weights & Biases, ONNX visualisers). The ML ecosystem that engineers already know works directly on NTL's routing infrastructure.
 
 ---
@@ -204,19 +210,19 @@ The routing model is an ONNX model. It can be analysed, visualised, and optimise
 
 ## Implementation Phases
 
-| Phase | What | Backend |
-|-------|------|---------|
-| 1 | Signal primitive with weight-based routing | Pure Rust (fallback) |
-| 2 | ONNX routing model with CPU inference | ONNX Runtime |
-| 3 | NPU acceleration on iOS and Android | Core ML + NNAPI |
-| 4 | Gradient-based training pipeline | CPU training + NPU inference |
-| 5 | Transfer learning across deployments | Model export/import |
-| 6 | Advanced principles (inhibition, recurrence, etc) | Full stack |
+| Phase | What                                              | Backend                      |
+| ----- | ------------------------------------------------- | ---------------------------- |
+| 1     | Signal primitive with weight-based routing        | Pure Rust (fallback)         |
+| 2     | ONNX routing model with CPU inference             | ONNX Runtime                 |
+| 3     | NPU acceleration on iOS and Android               | Core ML + NNAPI              |
+| 4     | Gradient-based training pipeline                  | CPU training + NPU inference |
+| 5     | Transfer learning across deployments              | Model export/import          |
+| 6     | Advanced principles (inhibition, recurrence, etc) | Full stack                   |
 
 Phase 1 proves the signal primitive concept. Phase 2 proves the neural routing concept. Phase 3 proves the hardware acceleration. Each phase is independently valuable. Each phase builds on the previous.
 
 ---
 
-*Neural Network as Base Layer — April 2026 — The Bundu Foundation*
+_Neural Network as Base Layer — April 2026 — The Bundu Foundation_
 
-*"The infrastructure IS the model. The traffic IS the training data. The routing IS the inference."*
+_"The infrastructure IS the model. The traffic IS the training data. The routing IS the inference."_

@@ -7,7 +7,7 @@ description: "openNTL runs on SQLite, PostgreSQL, in-memory, SiafuDB, graph and 
 ---
 
 **NTL is multi-database by design.** It does not ship a database and does not
-privilege one. It specifies *what a node must remember* and leaves *where* to
+privilege one. It specifies _what a node must remember_ and leaves _where_ to
 a backend you choose.
 
 If you run PostgreSQL, point NTL at it. If you are deploying to a phone,
@@ -26,16 +26,16 @@ write yourself.
 
 ## The Matrix
 
-| Backend | Family | Best for | Durability | Status |
-|---|---|---|---|---|
-| [SQLite](#sqlite) | Embedded relational | Edge nodes, single-machine full nodes | Power-loss safe (WAL) | **Shipping** |
-| [PostgreSQL](#postgresql) | Server relational | Full nodes in an existing Postgres estate | Power-loss safe | Schema + MCP server shipping; Rust backend in progress |
-| [In-memory](#in-memory) | Ephemeral | Tests, `--dev`, disposable nodes | None | **Shipping** |
-| [SiafuDB](#siafudb) | Embedded property graph | Offline-first device and Web3 deployments | Backend-dependent | Planned |
-| [SiafuDB-Kuzu](#siafudb-kuzu) | Columnar graph (C++) | Analytical queries over topology, vector search | Backend-dependent | Planned |
-| [Neo4j / Memgraph](#other-graph-databases) | Server graph | Existing graph estates | Backend-dependent | Community |
-| [Redis / Valkey](#kv-stores) | KV | Dedup cache and hot-state offload | Configurable | Community |
-| [Your own](#writing-a-backend) | — | Whatever you already run | Yours to state | Implement the trait |
+| Backend                                    | Family                  | Best for                                        | Durability            | Status                                                 |
+| ------------------------------------------ | ----------------------- | ----------------------------------------------- | --------------------- | ------------------------------------------------------ |
+| [SQLite](#sqlite)                          | Embedded relational     | Edge nodes, single-machine full nodes           | Power-loss safe (WAL) | **Shipping**                                           |
+| [PostgreSQL](#postgresql)                  | Server relational       | Full nodes in an existing Postgres estate       | Power-loss safe       | Schema + MCP server shipping; Rust backend in progress |
+| [In-memory](#in-memory)                    | Ephemeral               | Tests, `--dev`, disposable nodes                | None                  | **Shipping**                                           |
+| [SiafuDB](#siafudb)                        | Embedded property graph | Offline-first device and Web3 deployments       | Backend-dependent     | Planned                                                |
+| [SiafuDB-Kuzu](#siafudb-kuzu)              | Columnar graph (C++)    | Analytical queries over topology, vector search | Backend-dependent     | Planned                                                |
+| [Neo4j / Memgraph](#other-graph-databases) | Server graph            | Existing graph estates                          | Backend-dependent     | Community                                              |
+| [Redis / Valkey](#kv-stores)               | KV                      | Dedup cache and hot-state offload               | Configurable          | Community                                              |
+| [Your own](#writing-a-backend)             | —                       | Whatever you already run                        | Yours to state        | Implement the trait                                    |
 
 "Community" means the trait is sufficient and nobody has published one yet.
 
@@ -52,14 +52,14 @@ A graph backend lets topology queries be traversals instead of joins.
 Six categories, regardless of family. This is the part that makes the
 interface portable:
 
-| State | Why it cannot be lost |
-|---|---|
-| Synapse weights and type affinity | This *is* the learned model |
-| Topology knowledge, with provenance | Provenance is what blocks eclipse attacks |
-| Deduplication cache | Loop prevention depends on it |
-| Activation snapshot | Otherwise a restart resets backpressure |
-| Learning journal | The training data |
-| Influence accounting | Otherwise a forced restart resets an attacker's budget |
+| State                               | Why it cannot be lost                                  |
+| ----------------------------------- | ------------------------------------------------------ |
+| Synapse weights and type affinity   | This _is_ the learned model                            |
+| Topology knowledge, with provenance | Provenance is what blocks eclipse attacks              |
+| Deduplication cache                 | Loop prevention depends on it                          |
+| Activation snapshot                 | Otherwise a restart resets backpressure                |
+| Learning journal                    | The training data                                      |
+| Influence accounting                | Otherwise a forced restart resets an attacker's budget |
 
 Signal bodies are **optional** and off by default. See
 [spec/storage-interface](/spec/storage-interface) for which of these may be
@@ -145,8 +145,8 @@ weights.
 ## Graph Backends
 
 A node's synapse topology is a weighted, directed graph. A graph-native
-backend can store it as one, which turns questions like *"which paths within
-three hops have carried `Query` signals successfully"* into a native
+backend can store it as one, which turns questions like _"which paths within
+three hops have carried `Query` signals successfully"_ into a native
 traversal rather than a recursive join.
 
 Where the backend supports it, the storage graph and the synapse topology can
@@ -220,11 +220,11 @@ journal state elsewhere. The atomic check-and-set requirement in
 
 Nothing requires one backend for everything. A plausible full-node split:
 
-| State | Backend | Why |
-|---|---|---|
-| Synapses, topology, journal | PostgreSQL | Durable, queryable, already backed up |
-| Dedup cache | Redis | TTL-native, high churn, cheap to lose |
-| Signal history | Object storage | Large, cold, rarely read |
+| State                       | Backend        | Why                                   |
+| --------------------------- | -------------- | ------------------------------------- |
+| Synapses, topology, journal | PostgreSQL     | Durable, queryable, already backed up |
+| Dedup cache                 | Redis          | TTL-native, high churn, cheap to lose |
+| Signal history              | Object storage | Large, cold, rarely read              |
 
 This is a composition you build by implementing `NodeStore` over the pieces,
 not a configuration NTL ships. If you build one, the conformance suite still

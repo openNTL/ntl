@@ -5,6 +5,7 @@ description: "Rust API for NTL synapses: weights, lifecycle state, type affinity
 "og:description": "API reference for NTL synapse management, configuration, and weighted connection handling."
 "twitter:title": "NTL Synapse API"
 ---
+
 A synapse is a persistent, weighted connection between two nodes. It
 strengthens when it carries traffic that succeeds and weakens when that
 traffic fails or stops.
@@ -69,13 +70,13 @@ pub enum SynapseState {
 }
 ```
 
-| State | Meaning | May carry a signal |
-|---|---|---|
-| `Forming` | Handshake in progress | No |
-| `Active` | Weight at or above `active_threshold` | Yes |
-| `Weakening` | Below the active threshold, still connected | Yes |
-| `Dormant` | Below `dormancy_threshold`, connection idle | No |
-| `Pruned` | Terminated, state archived. Terminal | No |
+| State       | Meaning                                     | May carry a signal |
+| ----------- | ------------------------------------------- | ------------------ |
+| `Forming`   | Handshake in progress                       | No                 |
+| `Active`    | Weight at or above `active_threshold`       | Yes                |
+| `Weakening` | Below the active threshold, still connected | Yes                |
+| `Dormant`   | Below `dormancy_threshold`, connection idle | No                 |
+| `Pruned`    | Terminated, state archived. Terminal        | No                 |
 
 `SynapseState::can_carry()` answers that last column, and
 `is_terminal()` is true only for `Pruned`:
@@ -94,7 +95,7 @@ fn eligibility_by_state() {
 `Weakening` counting as eligible is a normative requirement of
 [synapse-lifecycle](/spec/synapse-lifecycle), not a tuning preference. A
 synapse recovers weight only by carrying traffic that then succeeds, so a
-state that is reachable from a single bad outcome *and* ineligible for traffic
+state that is reachable from a single bad outcome _and_ ineligible for traffic
 is a one-way trap. With `initial_weight` and `active_threshold` both at `0.1`
 by default, every new synapse would fall into it on its first failure.
 
@@ -108,22 +109,22 @@ handshake completed. `Synapse::activate()` is the only exit from `Forming`.
 not the live `Synapse` struct. Every timestamp is nanoseconds since the Unix
 epoch, and the field names say so.
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `SynapseId` | Unique identifier |
-| `peer` | `NodeId` | The node on the far end |
-| `weight` | `f32` | Learned weight in `[0, 1]` |
-| `attenuation_factor` | `f32` | Weight attenuation applied to signals crossing this synapse |
-| `state` | `SynapseState` | Lifecycle state |
-| `type_affinity` | `HashMap<String, u64>` | Per-signal-type success counts |
-| `established_at_ns` | `u64` | When the synapse was formed |
-| `last_active_ns` | `u64` | Last signal activity |
-| `signals_transmitted` | `u64` | Signals successfully transmitted |
-| `signals_received` | `u64` | Signals received |
-| `avg_latency_ns` | `u64` | Exponentially weighted mean round-trip latency |
-| `error_rate` | `f32` | Exponentially weighted transmission failure ratio |
-| `signature_failures` | `u32` | Failures counted in the current influence window |
-| `failure_window_start_ns` | `u64` | When that window began; zero if none |
+| Field                     | Type                   | Description                                                 |
+| ------------------------- | ---------------------- | ----------------------------------------------------------- |
+| `id`                      | `SynapseId`            | Unique identifier                                           |
+| `peer`                    | `NodeId`               | The node on the far end                                     |
+| `weight`                  | `f32`                  | Learned weight in `[0, 1]`                                  |
+| `attenuation_factor`      | `f32`                  | Weight attenuation applied to signals crossing this synapse |
+| `state`                   | `SynapseState`         | Lifecycle state                                             |
+| `type_affinity`           | `HashMap<String, u64>` | Per-signal-type success counts                              |
+| `established_at_ns`       | `u64`                  | When the synapse was formed                                 |
+| `last_active_ns`          | `u64`                  | Last signal activity                                        |
+| `signals_transmitted`     | `u64`                  | Signals successfully transmitted                            |
+| `signals_received`        | `u64`                  | Signals received                                            |
+| `avg_latency_ns`          | `u64`                  | Exponentially weighted mean round-trip latency              |
+| `error_rate`              | `f32`                  | Exponentially weighted transmission failure ratio           |
+| `signature_failures`      | `u32`                  | Failures counted in the current influence window            |
+| `failure_window_start_ns` | `u64`                  | When that window began; zero if none                        |
 
 ```rust
 fn reading_a_record(record: &SynapseRecord) -> u64 {
@@ -215,12 +216,12 @@ fn narrowing_the_filter(node: &Node) -> Result<Vec<SynapseRecord>, StoreError> {
 }
 ```
 
-| Field | Type | Meaning |
-|---|---|---|
-| `states` | `Vec<SynapseState>` | Match any of these states. Empty means any state |
-| `min_weight` | `Option<f32>` | Weight at or above this value |
-| `last_active_before_ns` | `Option<u64>` | Idle since before this timestamp — used by the decay and pruning sweeps |
-| `limit` | `Option<usize>` | Cap on returned rows. `None` means no cap |
+| Field                   | Type                | Meaning                                                                 |
+| ----------------------- | ------------------- | ----------------------------------------------------------------------- |
+| `states`                | `Vec<SynapseState>` | Match any of these states. Empty means any state                        |
+| `min_weight`            | `Option<f32>`       | Weight at or above this value                                           |
+| `last_active_before_ns` | `Option<u64>`       | Idle since before this timestamp — used by the decay and pruning sweeps |
+| `limit`                 | `Option<usize>`     | Cap on returned rows. `None` means no cap                               |
 
 ## Looking up a single synapse
 
@@ -338,18 +339,18 @@ outlive the process that observed it.
 Reached as `node.config().synapse`, or set in the `[synapse]` section of a
 node's configuration file.
 
-| Field | Default | Description |
-|---|---|---|
-| `initial_weight` | `0.1` | Weight a new synapse starts at |
-| `max_weight` | `1.0` | Ceiling a synapse can reach |
-| `decay_rate` | `0.01` | Weight decay rate |
-| `active_threshold` | `0.1` | Weight at or above which a synapse is `Active` |
-| `dormancy_threshold` | `0.01` | Weight below which it becomes `Dormant` |
-| `prune_after_hours` | `168` | Hours dormant before pruning |
-| `max_synapses` | `1000` | Cap on synapses per node |
-| `preferred_transport` | `Quic` | First choice of transport |
-| `fallback_transport` | `Tcp` | Used when the preferred one is unavailable |
-| `attenuation_factor` | `0.9` | Weight attenuation for signals passing through |
+| Field                 | Default | Description                                    |
+| --------------------- | ------- | ---------------------------------------------- |
+| `initial_weight`      | `0.1`   | Weight a new synapse starts at                 |
+| `max_weight`          | `1.0`   | Ceiling a synapse can reach                    |
+| `decay_rate`          | `0.01`  | Weight decay rate                              |
+| `active_threshold`    | `0.1`   | Weight at or above which a synapse is `Active` |
+| `dormancy_threshold`  | `0.01`  | Weight below which it becomes `Dormant`        |
+| `prune_after_hours`   | `168`   | Hours dormant before pruning                   |
+| `max_synapses`        | `1000`  | Cap on synapses per node                       |
+| `preferred_transport` | `Quic`  | First choice of transport                      |
+| `fallback_transport`  | `Tcp`   | Used when the preferred one is unavailable     |
+| `attenuation_factor`  | `0.9`   | Weight attenuation for signals passing through |
 
 `initial_weight` and `active_threshold` coincide at `0.1`, which puts a
 freshly formed synapse exactly on the `Active` boundary: one rejection moves

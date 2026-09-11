@@ -6,6 +6,7 @@ mode: "wide"
 "og:description": "How NTL handles cryptographic agility, node identity, and security from the protocol layer up."
 "twitter:title": "NTL Security Overview"
 ---
+
 NTL's security model is built on three principles:
 
 1. **Crypto agnosticism** — No cryptographic scheme is hardcoded into the protocol
@@ -16,22 +17,23 @@ NTL's security model is built on three principles:
 
 NTL is designed to resist:
 
-| Threat | Mitigation |
-|---|---|
-| Signal interception | End-to-end encryption via pluggable crypto |
-| Signal spoofing | Cryptographic signatures on all signals |
-| Signal replay | ULID timestamps + deduplication cache |
-| Node impersonation | Identity verification (local keys or DID) |
-| Topology mapping | Local-knowledge design, truncated traces |
-| Quantum cryptanalysis | Pluggable crypto with PQ defaults |
-| Spam/DoS | Activation thresholds + weight attenuation |
-| Sybil attacks | Synapse weight requires sustained valuable participation |
+| Threat                | Mitigation                                               |
+| --------------------- | -------------------------------------------------------- |
+| Signal interception   | End-to-end encryption via pluggable crypto               |
+| Signal spoofing       | Cryptographic signatures on all signals                  |
+| Signal replay         | ULID timestamps + deduplication cache                    |
+| Node impersonation    | Identity verification (local keys or DID)                |
+| Topology mapping      | Local-knowledge design, truncated traces                 |
+| Quantum cryptanalysis | Pluggable crypto with PQ defaults                        |
+| Spam/DoS              | Activation thresholds + weight attenuation               |
+| Sybil attacks         | Synapse weight requires sustained valuable participation |
 
 ## Layers of Security
 
 ### Signal Layer
 
 Every signal is:
+
 - **Signed** by the emitting node's identity key
 - **Optionally encrypted** end-to-end for targeted signals
 - **Timestamped** with ULID for replay prevention
@@ -40,6 +42,7 @@ Every signal is:
 ### Synapse Layer
 
 Every synapse:
+
 - Performs a **cryptographic handshake** on formation
 - Negotiates **transport encryption** (QUIC provides this by default)
 - Is **authenticated** — both nodes verify each other's identity
@@ -47,6 +50,7 @@ Every synapse:
 ### Network Layer
 
 The propagation engine provides:
+
 - **Weight-based spam resistance** — New nodes start with low-weight synapses; you can't flood the network without earning weight through valuable participation
 - **Activation thresholds** — Natural rate limiting that adapts to conditions
 - **Deduplication** — Prevents amplification attacks

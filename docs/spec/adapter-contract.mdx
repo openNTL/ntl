@@ -5,6 +5,7 @@ description: "Normative specification for NTL protocol-translation adapters — 
 "og:description": "Formal specification for protocol translation adapters that bridge external systems to the NTL signal network."
 "twitter:title": "NTL Adapter Contract Spec"
 ---
+
 **Version:** beta_0.0.0
 
 <Note>
@@ -14,10 +15,11 @@ description: "Normative specification for NTL protocol-translation adapters — 
   containing a single doc comment each, and no binary reads an `[adapter.*]`
   configuration table.
 
-  This page is therefore normative and unimplemented at the same time — the
-  contract is fixed, the implementations are not written. The
-  [adapter guides](/adapters/overview) describe intended behaviour on top of
-  it. Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+This page is therefore normative and unimplemented at the same time — the
+contract is fixed, the implementations are not written. The
+[adapter guides](/adapters/overview) describe intended behaviour on top of
+it. Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+
 </Note>
 
 ## Overview
@@ -71,11 +73,11 @@ AdapterCapabilities {
 
 ## Health States
 
-| State | Description | Behavior |
-|---|---|---|
-| `Healthy` | Operating normally | Full throughput |
-| `Degraded` | Partial functionality | Reduced throughput, increased timeouts |
-| `Unhealthy` | Not functioning | Queues signals, emits health warnings |
+| State       | Description           | Behavior                               |
+| ----------- | --------------------- | -------------------------------------- |
+| `Healthy`   | Operating normally    | Full throughput                        |
+| `Degraded`  | Partial functionality | Reduced throughput, increased timeouts |
+| `Unhealthy` | Not functioning       | Queues signals, emits health warnings  |
 
 ## Registration
 
@@ -86,6 +88,7 @@ node.register_adapter(adapter) -> Result
 ```
 
 Registered adapters:
+
 - Appear in node health checks
 - Are included in discovery signals
 - Can be queried via the node management interface
@@ -93,6 +96,7 @@ Registered adapters:
 ## Correlation Requirements
 
 Adapters that support correlation (request-response patterns) MUST:
+
 1. Generate a signal with a unique ID for each incoming request
 2. Hold the external connection open
 3. Match response signals by `correlation_id`
@@ -103,8 +107,8 @@ Adapters that support correlation (request-response patterns) MUST:
 
 The NTL reference implementation MUST include:
 
-| Adapter | Protocol | Module ID |
-|---|---|---|
-| Web2 | HTTP/1.1, HTTP/2, WebSocket, gRPC | `web2-v1` |
-| Web3 | EVM chains, DID verification | `web3-v1` |
-| Legacy | REST, SOAP (configuration-driven) | `legacy-v1` |
+| Adapter | Protocol                          | Module ID   |
+| ------- | --------------------------------- | ----------- |
+| Web2    | HTTP/1.1, HTTP/2, WebSocket, gRPC | `web2-v1`   |
+| Web3    | EVM chains, DID verification      | `web3-v1`   |
+| Legacy  | REST, SOAP (configuration-driven) | `legacy-v1` |

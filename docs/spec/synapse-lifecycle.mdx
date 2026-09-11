@@ -5,6 +5,7 @@ description: "Normative specification for NTL synapses: the handshake, lifecycle
 "og:description": "Formal specification for synapse formation, state transitions, weight adjustment, and pruning in NTL."
 "twitter:title": "NTL Synapse Lifecycle Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -15,13 +16,13 @@ This document specifies the lifecycle of NTL synapses — the persistent, weight
 
 A synapse MUST be in one of the following states:
 
-| State | Description |
-|---|---|
-| `FORMING` | Handshake in progress |
-| `ACTIVE` | Transmitting signals |
-| `WEAKENING` | Weight below active threshold, still connected |
-| `DORMANT` | Weight below dormancy threshold, connection idle |
-| `PRUNED` | Connection terminated, state archived |
+| State       | Description                                      |
+| ----------- | ------------------------------------------------ |
+| `FORMING`   | Handshake in progress                            |
+| `ACTIVE`    | Transmitting signals                             |
+| `WEAKENING` | Weight below active threshold, still connected   |
+| `DORMANT`   | Weight below dormancy threshold, connection idle |
+| `PRUNED`    | Connection terminated, state archived            |
 
 ## State Transitions
 
@@ -81,18 +82,18 @@ possible.
 A synapse may be chosen to carry a signal if and only if its state is
 **Active** or **Weakening**.
 
-| State | May carry signals | Why |
-|---|---|---|
-| Forming | No | Handshake incomplete |
-| Active | Yes | — |
-| **Weakening** | **Yes** | Below the active threshold but *still connected* |
-| Dormant | No | Connection idle; must be reactivated first |
-| Pruned | No | Terminal |
+| State         | May carry signals | Why                                              |
+| ------------- | ----------------- | ------------------------------------------------ |
+| Forming       | No                | Handshake incomplete                             |
+| Active        | Yes               | —                                                |
+| **Weakening** | **Yes**           | Below the active threshold but _still connected_ |
+| Dormant       | No                | Connection idle; must be reactivated first       |
+| Pruned        | No                | Terminal                                         |
 
 Including `Weakening` is normative, and it is a correctness requirement
 rather than a tuning preference. A synapse regains weight only by carrying
 traffic that then succeeds ([learning-model](/spec/learning-model) §2). A
-state that is reachable from a single negative outcome *and* ineligible for
+state that is reachable from a single negative outcome _and_ ineligible for
 traffic is therefore a one-way trap — the synapse can never earn its way
 back.
 
@@ -128,11 +129,11 @@ lifecycle-relevant consequences.
 
 Weight changes on three occasions:
 
-| Occasion | Effect | Reference |
-|---|---|---|
-| A routing decision resolves to an outcome | `w ← clamp(w + η·r·x, w_min, w_max)` | [learning-model](/spec/learning-model) §2.1 |
-| Time passes | Exponential decay with half-life `t½` | [learning-model](/spec/learning-model) §3 |
-| An unverifiable signature arrives | `w ← max(w·(1−p), w_min)`, `p = 0.5` | [threat-model](/spec/threat-model) §4 |
+| Occasion                                  | Effect                                | Reference                                   |
+| ----------------------------------------- | ------------------------------------- | ------------------------------------------- |
+| A routing decision resolves to an outcome | `w ← clamp(w + η·r·x, w_min, w_max)`  | [learning-model](/spec/learning-model) §2.1 |
+| Time passes                               | Exponential decay with half-life `t½` | [learning-model](/spec/learning-model) §3   |
+| An unverifiable signature arrives         | `w ← max(w·(1−p), w_min)`, `p = 0.5`  | [threat-model](/spec/threat-model) §4       |
 
 Two constraints bind every adjustment:
 
@@ -153,12 +154,12 @@ different result depending on how often the sweep happened to run.
 
 ### Thresholds
 
-| Threshold | Config field | Default | Transition |
-|---|---|---|---|
-| Active → Weakening | `active_threshold` | 0.1 | Weight drops below |
-| Weakening → Dormant | `dormancy_threshold` | 0.01 | Weight drops below |
-| Dormant → Pruned | `prune_after_hours` | 0.01 for 168 hours | Duration in dormant |
-| Dormant → Active | `active_threshold` | 0.1 | Signal received, weight restored |
+| Threshold           | Config field         | Default            | Transition                       |
+| ------------------- | -------------------- | ------------------ | -------------------------------- |
+| Active → Weakening  | `active_threshold`   | 0.1                | Weight drops below               |
+| Weakening → Dormant | `dormancy_threshold` | 0.01               | Weight drops below               |
+| Dormant → Pruned    | `prune_after_hours`  | 0.01 for 168 hours | Duration in dormant              |
+| Dormant → Active    | `active_threshold`   | 0.1                | Signal received, weight restored |
 
 Both thresholds MUST come from configuration. Hard-coding them means an
 operator who retunes `initial_weight` — or either threshold — silently gets
@@ -205,17 +206,17 @@ During handshake, nodes negotiate transport:
   nothing selects from one, so step 1 and step 2 have no counterpart in code
   and the RECOMMENDED default in step 3 is not what runs.
 
-  This is a gap in the implementation, not a defect in the requirement — but an
-  implementer should know that interoperating with the reference
-  implementation today means TCP, and that a peer expecting to negotiate will
-  find no one negotiating back. Tracking:
-  [openNTL/ntl#15](https://github.com/openNTL/ntl/issues/15).
+This is a gap in the implementation, not a defect in the requirement — but an
+implementer should know that interoperating with the reference
+implementation today means TCP, and that a peer expecting to negotiate will
+find no one negotiating back. Tracking:
+[openNTL/ntl#15](https://github.com/openNTL/ntl/issues/15).
+
 </Note>
 
 ## Synapse Limits
 
 Nodes SHOULD enforce a maximum synapse count to prevent resource exhaustion. The RECOMMENDED default is 1,000 active synapses per node. When the limit is reached, the node MUST reject new synapse requests or prune the weakest existing synapse.
-
 
 ## Related
 

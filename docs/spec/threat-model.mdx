@@ -5,6 +5,7 @@ description: "What openNTL defends against and what it does not: weight poisonin
 "og:description": "Adversarial analysis of NTL: weight poisoning, forged receipts, eclipse attacks, handshake replay, identifier prediction, and an explicit statement of what the protocol does not defend against."
 "twitter:title": "NTL Threat Model Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -23,19 +24,19 @@ after.
 
 ## Adversary Model
 
-| Capability | Assumed |
-|---|---|
-| Observe traffic on links they operate | Yes |
-| Inject signals with valid signatures under their own identity | Yes |
-| Create many identities cheaply | **Yes** — identities are unauthenticated public keys |
-| Drop, delay, or replay signals they carry | Yes |
-| Forge signatures under another identity | No |
-| Break the configured crypto primitives | No |
-| Compromise a target node's local storage | No (a compromised node is out of scope) |
+| Capability                                                    | Assumed                                              |
+| ------------------------------------------------------------- | ---------------------------------------------------- |
+| Observe traffic on links they operate                         | Yes                                                  |
+| Inject signals with valid signatures under their own identity | Yes                                                  |
+| Create many identities cheaply                                | **Yes** — identities are unauthenticated public keys |
+| Drop, delay, or replay signals they carry                     | Yes                                                  |
+| Forge signatures under another identity                       | No                                                   |
+| Break the configured crypto primitives                        | No                                                   |
+| Compromise a target node's local storage                      | No (a compromised node is out of scope)              |
 
 The critical assumption is the third. NTL identities are self-generated
 keypairs with no registration and no cost. **Sybil resistance is not
-available**, so every defence below is a *bound on damage per identity*
+available**, so every defence below is a _bound on damage per identity_
 rather than an attempt to keep attackers out.
 
 ## 1. Weight Poisoning
@@ -72,7 +73,7 @@ being asked to take instruction from its traffic.
 **Residual risk.** With `N` identities an attacker commands `N · C`
 influence per window. Since identities are free, `N` is bounded only by the
 attacker's bandwidth and the victim's `max_synapses`. The caps convert an
-*unbounded* attack into one that is *linear in attacker cost* — a
+_unbounded_ attack into one that is _linear in attacker cost_ — a
 meaningful improvement, not a solution. Operators in adversarial
 environments SHOULD lower `C`, cap synapses per address range, and prefer
 configured peers.
@@ -96,7 +97,7 @@ direct route to controlling the model — cheaper than generating real traffic.
    decision has already resolved to `timed_out`.
 
 **Residual risk.** A peer that genuinely received a signal can lie about
-having *handled* it, earning positive reward for a path that discards
+having _handled_ it, earning positive reward for a path that discards
 traffic. This is a black-hole attack and it is only partly mitigated: the
 node has no way to verify handling actually occurred. Mitigation is
 statistical — such a peer accrues no downstream evidence and its affinity
@@ -124,7 +125,7 @@ victim on an attacker-controlled view of the network.
    evict the peer with the least successful interaction history, not the
    least recently added. Recency-based eviction is what makes flooding work.
 
-**Residual risk.** A node whose *only* peers are attacker-controlled — a
+**Residual risk.** A node whose _only_ peers are attacker-controlled — a
 fresh node on a hostile network, or one whose bootstrap set is compromised —
 is fully eclipsed and cannot detect it. NTL has no external anchor of trust
 to appeal to.
@@ -156,7 +157,7 @@ that accumulates `signature_failure_prune_threshold` failures (default `5`)
 within one influence window, and SHOULD refuse to re-form it for a cooldown
 period (default 1 hour).
 
-A node MUST NOT let signature failures charge against the *victim's*
+A node MUST NOT let signature failures charge against the _victim's_
 influence budget — the penalty is applied to the synapse that carried the
 bad signature, and an attacker must not be able to exhaust a third party's
 budget by forging traffic that appears to come through them.
@@ -168,20 +169,20 @@ table.
 
 **Defences.**
 
-| Vector | Defence |
-|---|---|
-| Signal flood | Activation thresholds rise with load ([activation-model](/spec/activation-model)); potential is capped |
-| Queue exhaustion | Bounded queue with a specified overflow policy (activation model §Queue Overflow) |
-| Synapse table flood | `max_synapses`; weight-ordered eviction |
-| Dedup cache growth | TTL-bounded with mandatory purge |
-| Journal growth | `trim_journal` on a retention bound |
-| Oversized signals | `MAX_SIZE` = 1 MiB, enforced before parsing |
-| Signature-check CPU | Frames are size-bounded before allocation; see the ordering note below |
+| Vector              | Defence                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| Signal flood        | Activation thresholds rise with load ([activation-model](/spec/activation-model)); potential is capped |
+| Queue exhaustion    | Bounded queue with a specified overflow policy (activation model §Queue Overflow)                      |
+| Synapse table flood | `max_synapses`; weight-ordered eviction                                                                |
+| Dedup cache growth  | TTL-bounded with mandatory purge                                                                       |
+| Journal growth      | `trim_journal` on a retention bound                                                                    |
+| Oversized signals   | `MAX_SIZE` = 1 MiB, enforced before parsing                                                            |
+| Signature-check CPU | Frames are size-bounded before allocation; see the ordering note below                                 |
 
 A node MUST apply the **size** bound before signature verification, and
 before allocating a buffer for the frame.
 
-TTL and deduplication go *after* verification, which is a deliberate reversal
+TTL and deduplication go _after_ verification, which is a deliberate reversal
 of 0.2.0-draft — see [propagation-rules](/spec/propagation-rules) Rule 5 for
 the reasoning. In short: deduplication is a write, so checking it first lets
 unauthenticated traffic claim identifiers and suppress genuine signals, and a
@@ -203,12 +204,12 @@ acknowledged signal being downgraded to best-effort.
 
 Four fields cannot be covered, because propagation mutates them by design:
 
-| Field | Mutated by |
-|---|---|
-| `signature` | the signature itself |
-| `trace` | each node appending its identifier |
-| `ttl` | each hop decrementing it |
-| `weight` | attenuation at each synapse |
+| Field       | Mutated by                         |
+| ----------- | ---------------------------------- |
+| `signature` | the signature itself               |
+| `trace`     | each node appending its identifier |
+| `ttl`       | each hop decrementing it           |
+| `weight`    | attenuation at each synapse        |
 
 A signature over these could not survive one hop.
 
@@ -288,7 +289,7 @@ signal the node emits.
 The attack, given prediction:
 
 1. Peer with the nodes the victim routes through — identities are free (§10).
-2. Emit cheap signals carrying the victim's *next* identifiers, signed
+2. Emit cheap signals carrying the victim's _next_ identifiers, signed
    honestly under the attacker's own identity, so they verify normally.
 3. The victim's real signal now hits `seen_signals` at each relay and is
    dropped: no handling, no forward, no receipt.
@@ -326,16 +327,16 @@ looks like ordinary mesh traffic. That would be the cheapest attack in this
 document: any connected peer could inject signals under any identity, at no
 cost. Every mitigation in §1 through §4 is built on a claimed origin meaning
 something. Worse, the incentive gradient would point straight at the hole —
-forging as a *known* origin costs the forger a signature-failure penalty (§4),
+forging as a _known_ origin costs the forger a signature-failure penalty (§4),
 while forging as an unknown one would cost nothing at all.
 
 So the honest statement of the current guarantee is:
 
-| Signal | Verified? |
-|---|---|
-| From a directly connected peer | Yes — key from the handshake |
-| Relayed, origin currently connected | Yes — key from that session |
-| Relayed, origin never met | **Dropped** |
+| Signal                              | Verified?                    |
+| ----------------------------------- | ---------------------------- |
+| From a directly connected peer      | Yes — key from the handshake |
+| Relayed, origin currently connected | Yes — key from that session  |
+| Relayed, origin never met           | **Dropped**                  |
 
 **Verified delivery is one hop in the reference implementation.** Multi-hop
 propagation works only between nodes that have each met the origin.
@@ -368,28 +369,28 @@ traffic this node cannot authenticate.
 NTL does **not** defend against the following, as of `beta_0.0.0`. Each is a
 real risk, listed so that operators are not surprised.
 
-| Not defended | Consequence | Roadmap |
-|---|---|---|
-| **Sybil attacks proper** | Identities are free; per-identity caps bound damage per identity but an attacker can buy more identities | Requires identity cost (stake, proof-of-work, or attestation) — a governance decision, not only a technical one |
-| **Black-hole peers** | A peer can acknowledge signals it discards, earning reward for a path that delivers nothing | Needs end-to-end receipts distinguishable from hop-local ones |
-| **Global traffic analysis** | An observer with broad visibility can map the topology and infer application behaviour from headers | Needs header encryption and cover traffic |
-| **Malicious node internals** | A compromised node can do anything within its own authority | Out of scope by definition |
-| **Byzantine agreement** | NTL provides no consensus; nodes can hold contradictory views of topology indefinitely | Not a goal; applications needing consensus must supply it |
-| **Payload confidentiality by default** | Payloads are signed, not encrypted, unless the application encrypts them | Application responsibility; see [crypto-interface](/spec/crypto-interface) |
-| **Guaranteed delivery** | `best-effort` may silently absorb signals; `acknowledged` bounds this but cannot defeat a partition | See [delivery-semantics](/spec/delivery-semantics) |
-| **Denial of service at the network layer** | Bandwidth floods are outside NTL's control | Deployment concern |
-| **Rollback of local state** | An attacker with filesystem access can revert learned weights | Requires attested storage |
+| Not defended                               | Consequence                                                                                              | Roadmap                                                                                                         |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Sybil attacks proper**                   | Identities are free; per-identity caps bound damage per identity but an attacker can buy more identities | Requires identity cost (stake, proof-of-work, or attestation) — a governance decision, not only a technical one |
+| **Black-hole peers**                       | A peer can acknowledge signals it discards, earning reward for a path that delivers nothing              | Needs end-to-end receipts distinguishable from hop-local ones                                                   |
+| **Global traffic analysis**                | An observer with broad visibility can map the topology and infer application behaviour from headers      | Needs header encryption and cover traffic                                                                       |
+| **Malicious node internals**               | A compromised node can do anything within its own authority                                              | Out of scope by definition                                                                                      |
+| **Byzantine agreement**                    | NTL provides no consensus; nodes can hold contradictory views of topology indefinitely                   | Not a goal; applications needing consensus must supply it                                                       |
+| **Payload confidentiality by default**     | Payloads are signed, not encrypted, unless the application encrypts them                                 | Application responsibility; see [crypto-interface](/spec/crypto-interface)                                      |
+| **Guaranteed delivery**                    | `best-effort` may silently absorb signals; `acknowledged` bounds this but cannot defeat a partition      | See [delivery-semantics](/spec/delivery-semantics)                                                              |
+| **Denial of service at the network layer** | Bandwidth floods are outside NTL's control                                                               | Deployment concern                                                                                              |
+| **Rollback of local state**                | An attacker with filesystem access can revert learned weights                                            | Requires attested storage                                                                                       |
 
 An implementation MUST NOT claim protection against anything in this table.
 
 ## 11. Deployment Guidance
 
-| Environment | Recommendations |
-|---|---|
-| **Public network** | Lowest `C`; several bootstrap operators; cap synapses per address range; alert on signature-failure rate |
-| **Consortium** | Allowlist identities at synapse formation — this restores Sybil resistance, and is the only configuration in which it holds |
-| **Edge/intermittent** | Longer `T_ack`; expect a high pending fraction; do not read timeouts as attacks |
-| **Transactional** | `acknowledged` delivery class only; treat `best-effort` as unsuitable |
+| Environment           | Recommendations                                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Public network**    | Lowest `C`; several bootstrap operators; cap synapses per address range; alert on signature-failure rate                    |
+| **Consortium**        | Allowlist identities at synapse formation — this restores Sybil resistance, and is the only configuration in which it holds |
+| **Edge/intermittent** | Longer `T_ack`; expect a high pending fraction; do not read timeouts as attacks                                             |
+| **Transactional**     | `acknowledged` delivery class only; treat `best-effort` as unsuitable                                                       |
 
 The strongest available mitigation is an **identity allowlist at synapse
 formation**. Where deployment permits it, most of this document ceases to
