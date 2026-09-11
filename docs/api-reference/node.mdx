@@ -5,6 +5,7 @@ description: "Rust API for building and running an NTL node — NodeBuilder, con
 "og:description": "API reference for NTL node initialization, lifecycle management, and the NodeBuilder pattern."
 "twitter:title": "NTL Node API"
 ---
+
 `Node` is the entry point to the NTL runtime, and it is smaller than it looks.
 It owns storage, activation, propagation and learning — and nothing else. No
 socket, no thread, no timer. It decides what should happen to a signal and
@@ -63,15 +64,15 @@ without saying so.
 
 That is the whole builder. Six setters and a `build()`.
 
-| Method | Purpose |
-| --- | --- |
-| `with_config(NodeConfig)` | Supply configuration directly. |
-| `with_config_file(&str)` | Load configuration from a TOML file. |
-| `with_identity(NodeId)` | Set this node's identity. Otherwise it is read from the store, or generated and persisted on first build. |
-| `with_store(Arc<dyn NodeStore>)` | The storage backend. Required. |
-| `with_clock(Arc<dyn Clock>)` | Time source. Defaults to the host clock where one exists; on `wasm32` there is no default and `build()` fails without one. |
-| `with_rng(Box<dyn Rng>)` | Randomness. Defaults to a `SplitMix64` seeded from identity and time. |
-| `build()` | `ntl_core::Result<Node>`. Synchronous. |
+| Method                           | Purpose                                                                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `with_config(NodeConfig)`        | Supply configuration directly.                                                                                             |
+| `with_config_file(&str)`         | Load configuration from a TOML file.                                                                                       |
+| `with_identity(NodeId)`          | Set this node's identity. Otherwise it is read from the store, or generated and persisted on first build.                  |
+| `with_store(Arc<dyn NodeStore>)` | The storage backend. Required.                                                                                             |
+| `with_clock(Arc<dyn Clock>)`     | Time source. Defaults to the host clock where one exists; on `wasm32` there is no default and `build()` fails without one. |
+| `with_rng(Box<dyn Rng>)`         | Randomness. Defaults to a `SplitMix64` seeded from identity and time.                                                      |
+| `build()`                        | `ntl_core::Result<Node>`. Synchronous.                                                                                     |
 
 ### Settings that are configuration, not builder calls
 
@@ -80,11 +81,11 @@ They live there because they are validated together at load, and because a
 node that silently ignored one of them would be worse than one that refused to
 start:
 
-| Not a builder method | Where it actually lives |
-| --- | --- |
+| Not a builder method     | Where it actually lives                                                                                                                               |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `with_crypto_module(..)` | `config.crypto_module`. Validated against `crypto::supported_modules()`; a module this build cannot provide is a startup failure, not a substitution. |
-| `with_bootstrap(..)` | `config.network.bootstrap_nodes` |
-| `with_max_synapses(..)` | `config.synapse.max_synapses` |
+| `with_bootstrap(..)`     | `config.network.bootstrap_nodes`                                                                                                                      |
+| `with_max_synapses(..)`  | `config.synapse.max_synapses`                                                                                                                         |
 
 ### Deterministic construction
 
@@ -209,14 +210,14 @@ the node does not route it back where it came from.
 
 ### Reading a `Disposition`
 
-| Field | Meaning |
-| --- | --- |
-| `forward_to: Vec<Forward>` | Peers to send to, each with the `journal_id` recording the decision. |
-| `handle_locally: Vec<QueuedSignal>` | Signals the activation gate released for local handling. |
-| `receipt: Option<Receipt>` | A receipt you must emit, when a refusal owes the sender one. |
-| `rejected: Option<RejectReason>` | Why it was refused, if it was. Also `was_rejected()`. |
-| `evicted: Option<Evicted>` | A *different* signal displaced from the queue. Owed to a different sender, which is why it is not folded into `receipt`. |
-| `queued: bool` | Whether the arriving signal is now in the activation queue. |
+| Field                               | Meaning                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `forward_to: Vec<Forward>`          | Peers to send to, each with the `journal_id` recording the decision.                                                     |
+| `handle_locally: Vec<QueuedSignal>` | Signals the activation gate released for local handling.                                                                 |
+| `receipt: Option<Receipt>`          | A receipt you must emit, when a refusal owes the sender one.                                                             |
+| `rejected: Option<RejectReason>`    | Why it was refused, if it was. Also `was_rejected()`.                                                                    |
+| `evicted: Option<Evicted>`          | A _different_ signal displaced from the queue. Owed to a different sender, which is why it is not folded into `receipt`. |
+| `queued: bool`                      | Whether the arriving signal is now in the activation queue.                                                              |
 
 <Warning>
   `queued` is load-bearing. Retain the signal body while it is true and only
@@ -364,17 +365,17 @@ reflect nothing.
 
 Everything this page previously documented, and what to reach for instead.
 
-| Was documented | Reality |
-| --- | --- |
-| `.await` on any node method | `ntl-core` has no `async fn`. Drop it. |
-| `use ntl::…` | The crate is `ntl_core`. |
-| `NodeBuilder::with_crypto_module` | `config.crypto_module` |
-| `NodeBuilder::with_bootstrap` | `config.network.bootstrap_nodes` |
-| `NodeBuilder::with_max_synapses` | `config.synapse.max_synapses` |
-| `node.run_until_shutdown()` | Your loop, calling `poll_activation`, `sweep_timeouts` and `checkpoint`. |
-| `node.register_handler(..)` / `SignalHandler` | `receive` / `receive_local` return a `Disposition` you act on. |
-| `node.register_adapter(..)` | The `Adapter` trait is driven by the binary that owns the transport, not registered on the node. See [Adapter](/api-reference/adapter). |
-| `node.synapses()` | `node.store().list_synapses(&SynapseFilter::eligible())` |
-| `node.status()` | `identity()`, the store, and `learning_health()`. |
-| `node.listen(signal_type)` | No listener exists. Signals reach you through `Disposition::handle_locally` and `poll_activation`. |
-| `node.wait_correlation(id, timeout)` | Correlation is a signal field (`with_correlation`); matching a reply to a request belongs to the caller, which is the layer that has a timer. |
+| Was documented                                | Reality                                                                                                                                       |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.await` on any node method                   | `ntl-core` has no `async fn`. Drop it.                                                                                                        |
+| `use ntl::…`                                  | The crate is `ntl_core`.                                                                                                                      |
+| `NodeBuilder::with_crypto_module`             | `config.crypto_module`                                                                                                                        |
+| `NodeBuilder::with_bootstrap`                 | `config.network.bootstrap_nodes`                                                                                                              |
+| `NodeBuilder::with_max_synapses`              | `config.synapse.max_synapses`                                                                                                                 |
+| `node.run_until_shutdown()`                   | Your loop, calling `poll_activation`, `sweep_timeouts` and `checkpoint`.                                                                      |
+| `node.register_handler(..)` / `SignalHandler` | `receive` / `receive_local` return a `Disposition` you act on.                                                                                |
+| `node.register_adapter(..)`                   | The `Adapter` trait is driven by the binary that owns the transport, not registered on the node. See [Adapter](/api-reference/adapter).       |
+| `node.synapses()`                             | `node.store().list_synapses(&SynapseFilter::eligible())`                                                                                      |
+| `node.status()`                               | `identity()`, the store, and `learning_health()`.                                                                                             |
+| `node.listen(signal_type)`                    | No listener exists. Signals reach you through `Disposition::handle_locally` and `poll_activation`.                                            |
+| `node.wait_correlation(id, timeout)`          | Correlation is a signal field (`with_correlation`); matching a reply to a request belongs to the caller, which is the layer that has a timer. |

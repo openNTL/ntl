@@ -32,11 +32,7 @@
         "groups": [
           {
             "group": "Introduction",
-            "pages": [
-              "introduction",
-              "why-ntl",
-              "architecture"
-            ]
+            "pages": ["introduction", "why-ntl", "architecture"]
           },
           {
             "group": "Core Concepts",

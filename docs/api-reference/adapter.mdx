@@ -5,6 +5,7 @@ description: "Rust API for the NTL Adapter trait: a synchronous protocol-transla
 "og:description": "API reference for the NTL Adapter trait: its real synchronous signature, its types, and how to implement one."
 "twitter:title": "NTL Adapter API"
 ---
+
 Adapters translate between NTL signals and external protocols.
 
 ## The two things to know first
@@ -28,7 +29,8 @@ configured or run today; what it gives you is the contract to implement.
   describe intended behaviour on top of it, and their configuration keys are
   proposed rather than parsed — no `[adapter.*]` table is read by any binary.
 
-  Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+Tracking: [openNTL/ntl#14](https://github.com/openNTL/ntl/issues/14).
+
 </Warning>
 
 The crate is `ntl_core` — note the underscore in Rust paths. `Adapter` and
@@ -261,12 +263,12 @@ fn describe(adapter: &dyn Adapter) -> String {
 
 ## What is not here yet
 
-| Not implemented | Where it is going |
-|---|---|
+| Not implemented                               | Where it is going                                                             |
+| --------------------------------------------- | ----------------------------------------------------------------------------- |
 | `Web2Adapter`, `Web3Adapter`, `LegacyAdapter` | The three placeholder crates, [#14](https://github.com/openNTL/ntl/issues/14) |
-| `node.register_adapter(...)` | `Node` has no adapter registry; the spec sketches one |
-| `start()` / `stop()` lifecycle | Not on the Rust trait; the spec's interface sketch lists them |
-| `[adapter.web2]`, `[adapter.web3]` config | Commented-out proposals in `config.example.toml`, parsed by nothing |
+| `node.register_adapter(...)`                  | `Node` has no adapter registry; the spec sketches one                         |
+| `start()` / `stop()` lifecycle                | Not on the Rust trait; the spec's interface sketch lists them                 |
+| `[adapter.web2]`, `[adapter.web3]` config     | Commented-out proposals in `config.example.toml`, parsed by nothing           |
 
 The last three are places where
 [spec/adapter-contract](/spec/adapter-contract) is ahead of the code: it is

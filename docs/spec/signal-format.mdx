@@ -5,6 +5,7 @@ description: "The NTL signal wire format: CBOR field layout, identifiers, which 
 "og:description": "The binary wire format specification for NTL signals, including encoding, headers, and payload structure."
 "twitter:title": "NTL Signal Format Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -27,24 +28,24 @@ Signals are encoded in CBOR (RFC 8949) by default. The wire format consists of a
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-| Field | Bits | Description |
-|---|---|---|
-| Magic | 24 | `0x4E544C` ("NTL" in ASCII) |
-| Version | 4 | Protocol version (0-15) |
-| Type | 4 | Signal type enum |
-| Flags | 8 | Bitfield (see below) |
-| Body Length | 24 | CBOR body length in bytes |
+| Field       | Bits | Description                 |
+| ----------- | ---- | --------------------------- |
+| Magic       | 24   | `0x4E544C` ("NTL" in ASCII) |
+| Version     | 4    | Protocol version (0-15)     |
+| Type        | 4    | Signal type enum            |
+| Flags       | 8    | Bitfield (see below)        |
+| Body Length | 24   | CBOR body length in bytes   |
 
 ### Flags
 
-| Bit | Name | Description |
-|---|---|---|
-| 0 | `ENCRYPTED` | Payload is encrypted |
-| 1 | `COMPRESSED` | Body is compressed (LZ4) |
-| 2 | `TRACE` | Signal carries a propagation trace |
-| 3 | `CORRELATION` | Signal has a correlation ID |
-| 4 | `PRIORITY` | Signal has elevated priority |
-| 5-7 | Reserved | Must be 0 |
+| Bit | Name          | Description                        |
+| --- | ------------- | ---------------------------------- |
+| 0   | `ENCRYPTED`   | Payload is encrypted               |
+| 1   | `COMPRESSED`  | Body is compressed (LZ4)           |
+| 2   | `TRACE`       | Signal carries a propagation trace |
+| 3   | `CORRELATION` | Signal has a correlation ID        |
+| 4   | `PRIORITY`    | Signal has elevated priority       |
+| 5-7 | Reserved      | Must be 0                          |
 
 ### Body (CBOR)
 
@@ -120,12 +121,12 @@ The body is a CBOR map with the following fields:
 - **Requirement:** OPTIONAL (default: 0 = CBOR)
 - **Values:**
 
-| Value | Encoding |
-|---|---|
-| 0 | CBOR |
-| 1 | Protobuf |
-| 2 | Raw bytes |
-| 3-127 | Reserved |
+| Value   | Encoding                     |
+| ------- | ---------------------------- |
+| 0       | CBOR                         |
+| 1       | Protobuf                     |
+| 2       | Raw bytes                    |
+| 3-127   | Reserved                     |
 | 128-255 | Custom (application-defined) |
 
 ### scope (Propagation Scope)
@@ -134,28 +135,28 @@ The body is a CBOR map with the following fields:
 - **Requirement:** OPTIONAL (default: 1 = Weighted)
 - **Values:**
 
-| Value | Scope |
-|---|---|
-| 0 | Flood |
-| 1 | Weighted |
-| 2 | Targeted |
-| 3 | Gradient |
-| 4-127 | Reserved |
-| 128-255 | Custom |
+| Value   | Scope    |
+| ------- | -------- |
+| 0       | Flood    |
+| 1       | Weighted |
+| 2       | Targeted |
+| 3       | Gradient |
+| 4-127   | Reserved |
+| 128-255 | Custom   |
 
 ## Signal Types
 
-| Value | Type | Description |
-|---|---|---|
-| 0 | Data | Carries a data payload |
-| 1 | Query | Requests data from the network |
-| 2 | Event | Notifies of a state change |
-| 3 | Command | Requests an action |
-| 4 | Heartbeat | Maintains synapse liveness |
-| 5 | Discovery | Announces node capability |
-| 6 | Receipt | Reports the outcome of an acknowledged signal |
-| 7-14 | Reserved | Future protocol use |
-| 15 | Custom | Application-defined |
+| Value | Type      | Description                                   |
+| ----- | --------- | --------------------------------------------- |
+| 0     | Data      | Carries a data payload                        |
+| 1     | Query     | Requests data from the network                |
+| 2     | Event     | Notifies of a state change                    |
+| 3     | Command   | Requests an action                            |
+| 4     | Heartbeat | Maintains synapse liveness                    |
+| 5     | Discovery | Announces node capability                     |
+| 6     | Receipt   | Reports the outcome of an acknowledged signal |
+| 7-14  | Reserved  | Future protocol use                           |
+| 15    | Custom    | Application-defined                           |
 
 ### del (Delivery Class)
 
@@ -163,11 +164,11 @@ The body is a CBOR map with the following fields:
 - **Requirement:** OPTIONAL (default: 0 = best-effort)
 - **Values:**
 
-| Value | Class | Guarantee |
-|---|---|---|
-| 0 | `best-effort` | None; may be silently absorbed |
-| 1 | `acknowledged` | At-least-once, or the sender learns it failed |
-| 2-255 | Reserved | — |
+| Value | Class          | Guarantee                                     |
+| ----- | -------------- | --------------------------------------------- |
+| 0     | `best-effort`  | None; may be silently absorbed                |
+| 1     | `acknowledged` | At-least-once, or the sender learns it failed |
+| 2-255 | Reserved       | —                                             |
 
 The delivery class is part of the **signed body**, so an intermediate node
 cannot downgrade it. A node that does not support `acknowledged` MUST reject

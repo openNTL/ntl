@@ -47,23 +47,23 @@ Full walkthrough: [openntl.org/guides/quickstart](https://openntl.org/guides/qui
 
 ## Commands
 
-| Command | Does |
-|---|---|
-| `ntl init` | Create identity, config and store |
-| `ntl start` | Run a node (`--dev` binds loopback only) |
-| `ntl emit` | Emit a signal (`--acknowledged` for at-least-once) |
-| `ntl listen` | Print signals as they arrive |
-| `ntl synapses` | Show learned weights and per-type affinity |
-| `ntl status` | Node state and routing-model health |
-| `ntl topology` | Known peers and their provenance |
+| Command        | Does                                               |
+| -------------- | -------------------------------------------------- |
+| `ntl init`     | Create identity, config and store                  |
+| `ntl start`    | Run a node (`--dev` binds loopback only)           |
+| `ntl emit`     | Emit a signal (`--acknowledged` for at-least-once) |
+| `ntl listen`   | Print signals as they arrive                       |
+| `ntl synapses` | Show learned weights and per-type affinity         |
+| `ntl status`   | Node state and routing-model health                |
+| `ntl topology` | Known peers and their provenance                   |
 
 ## Environment
 
-| Variable | Effect |
-|---|---|
-| `NTL_HOME` | Node directory. Default `~/.ntl` |
-| `NTL_SKIP_DOWNLOAD` | Skip the postinstall download |
-| `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug` |
+| Variable            | Effect                            |
+| ------------------- | --------------------------------- |
+| `NTL_HOME`          | Node directory. Default `~/.ntl`  |
+| `NTL_SKIP_DOWNLOAD` | Skip the postinstall download     |
+| `RUST_LOG`          | Log filter, e.g. `RUST_LOG=debug` |
 
 ## Notes on install behaviour
 

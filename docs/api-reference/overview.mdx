@@ -6,6 +6,7 @@ mode: "wide"
 "og:description": "Public Rust API documentation for the NTL runtime library, covering nodes, signals, synapses, and adapters."
 "twitter:title": "NTL API Reference"
 ---
+
 This section documents the public Rust API for the NTL runtime library.
 
 <Note>
@@ -156,17 +157,18 @@ store call.
   page has a test file that holds its samples verbatim, so a sample that stops
   matching the code fails CI rather than quietly misleading a reader:
 
-  | Page | Test |
-  | --- | --- |
-  | This page | `runtime/ntl-core/tests/api_reference_samples.rs` |
-  | [Node](/api-reference/node) | `runtime/ntl-core/tests/api_reference_node.rs` |
-  | [Signal](/api-reference/signal) | `runtime/ntl-core/tests/api_reference_signal.rs` |
-  | [Synapse](/api-reference/synapse) | `runtime/ntl-core/tests/api_reference_synapse.rs` |
-  | [Adapter](/api-reference/adapter) | `runtime/ntl-core/tests/api_reference_adapter.rs` |
+| Page                              | Test                                              |
+| --------------------------------- | ------------------------------------------------- |
+| This page                         | `runtime/ntl-core/tests/api_reference_samples.rs` |
+| [Node](/api-reference/node)       | `runtime/ntl-core/tests/api_reference_node.rs`    |
+| [Signal](/api-reference/signal)   | `runtime/ntl-core/tests/api_reference_signal.rs`  |
+| [Synapse](/api-reference/synapse) | `runtime/ntl-core/tests/api_reference_synapse.rs` |
+| [Adapter](/api-reference/adapter) | `runtime/ntl-core/tests/api_reference_adapter.rs` |
 
-  Before this, none of it compiled: the pages carried `use ntl::` for a crate
-  named `ntl_core`, `.await` on a crate with no `async fn`, and identifiers that
-  never existed (`SignalHandler`, `register_handler`, `with_crypto_module`,
-  `node.synapses()`). Closes
-  [openNTL/ntl#21](https://github.com/openNTL/ntl/issues/21).
+Before this, none of it compiled: the pages carried `use ntl::` for a crate
+named `ntl_core`, `.await` on a crate with no `async fn`, and identifiers that
+never existed (`SignalHandler`, `register_handler`, `with_crypto_module`,
+`node.synapses()`). Closes
+[openNTL/ntl#21](https://github.com/openNTL/ntl/issues/21).
+
 </Note>

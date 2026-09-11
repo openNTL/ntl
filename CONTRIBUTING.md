@@ -1,6 +1,6 @@
 # Contributing to NTL
 
-Thank you for your interest in contributing to the Neural Transfer Layer. NTL is built on the Ubuntu philosophy — *"I am because we are."*
+Thank you for your interest in contributing to the Neural Transfer Layer. NTL is built on the Ubuntu philosophy — _"I am because we are."_
 
 ## Getting Started
 
@@ -38,6 +38,7 @@ cargo fmt --all
 4. Add tests for new functionality
 5. Ensure all checks pass. These are exactly what CI runs, so a green run
    here is a green run there:
+
    ```bash
    cargo fmt --all --check
    cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -46,15 +47,19 @@ cargo fmt --all
    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
    cargo check --workspace --all-features    # on 1.85, the declared MSRV
    ```
+
    The wasm32 check is not optional cosmetics: `ntl-core` is required to build
    for it, which is what keeps an async runtime, a transport, or an ambient
    clock out of the crate. CI fails on a dependency that reintroduces one.
 
    If you touched `mcp/ntl-postgres-mcp-server`:
+
    ```bash
    npx tsc --noEmit && npx vitest run && npx wrangler deploy --dry-run --env=""
    ```
+
    If you touched `npm/ntl-cli`: `npm test`
+
 6. Submit a pull request
 
 ## Project Structure
@@ -106,6 +111,7 @@ Changes to the NTL protocol specification require an RFC. See `rfcs/0000-templat
 ## Commit Messages
 
 Use conventional commits:
+
 - `feat:` new feature
 - `fix:` bug fix
 - `docs:` documentation

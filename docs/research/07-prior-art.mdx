@@ -16,15 +16,15 @@ adds, and where existing systems are simply the better choice.
 
 ## Summary
 
-| System | Era | Shares with NTL | NTL differs by |
-|---|---|---|---|
-| **Q-routing** | 1994 | Reinforcement-learned routing from delivery feedback | Per-signal-type affinity; runs at the application transport layer, not inside routers |
-| **AntNet** | 1998 | Stigmergic reinforcement with pheromone evaporation | Evaporation becomes an explicit half-life; probabilistic selection is specified rather than emergent |
-| **Named Data Networking** | 2009– | Content-addressed forwarding; interest-based routing | Signals are typed and weighted, not named; no caching layer |
-| **Delay-tolerant networking** | 2003– | Store-and-forward under intermittent connectivity | Learned path selection rather than epidemic or utility heuristics |
-| **libp2p** | 2015– | Peer discovery, multi-transport, pluggable crypto | Routing weights are learned from outcomes, not from DHT distance |
-| **MQTT** | 1999 | Lightweight pub/sub for constrained devices | Brokerless; no fixed topic hierarchy |
-| **NATS** | 2011 | Subject-based routing, at-least-once semantics | Weights adapt per node; no cluster-wide routing table |
+| System                        | Era   | Shares with NTL                                      | NTL differs by                                                                                       |
+| ----------------------------- | ----- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Q-routing**                 | 1994  | Reinforcement-learned routing from delivery feedback | Per-signal-type affinity; runs at the application transport layer, not inside routers                |
+| **AntNet**                    | 1998  | Stigmergic reinforcement with pheromone evaporation  | Evaporation becomes an explicit half-life; probabilistic selection is specified rather than emergent |
+| **Named Data Networking**     | 2009– | Content-addressed forwarding; interest-based routing | Signals are typed and weighted, not named; no caching layer                                          |
+| **Delay-tolerant networking** | 2003– | Store-and-forward under intermittent connectivity    | Learned path selection rather than epidemic or utility heuristics                                    |
+| **libp2p**                    | 2015– | Peer discovery, multi-transport, pluggable crypto    | Routing weights are learned from outcomes, not from DHT distance                                     |
+| **MQTT**                      | 1999  | Lightweight pub/sub for constrained devices          | Brokerless; no fixed topic hierarchy                                                                 |
+| **NATS**                      | 2011  | Subject-based routing, at-least-once semantics       | Weights adapt per node; no cluster-wide routing table                                                |
 
 ## Reinforcement-Learned Routing
 
@@ -40,8 +40,8 @@ observed outcomes outperforms routing computed from static topology.
 
 **NTL differs:**
 
-- Q-routing estimates *delivery time to a destination*. NTL estimates
-  *suitability of a synapse for a signal type* — a different and smaller
+- Q-routing estimates _delivery time to a destination_. NTL estimates
+  _suitability of a synapse for a signal type_ — a different and smaller
   learning problem, because most NTL traffic is not addressed to a specific
   destination at all.
 - Q-routing lives in the router. NTL lives at the application transport
@@ -61,8 +61,8 @@ network is open and the traffic is heterogeneous.
 Ant-colony routing: probe agents deposit "pheromone" on paths that work, and
 pheromone evaporates over time so stale paths fade.
 
-**NTL takes:** two mechanisms almost directly. Weight decay *is* pheromone
-evaporation, and stochastic path selection *is* the probabilistic transition
+**NTL takes:** two mechanisms almost directly. Weight decay _is_ pheromone
+evaporation, and stochastic path selection _is_ the probabilistic transition
 rule. The
 [learning-model](/spec/learning-model) says so explicitly rather than
 reinventing the vocabulary.
@@ -87,7 +87,7 @@ from production networks. Any honest positioning has to engage with why:
 4. **Nothing to learn from.** Classical routing lacks a per-flow outcome
    signal at the transport layer.
 
-NTL's bet is that (1) and (2) do not apply at the *application* transport
+NTL's bet is that (1) and (2) do not apply at the _application_ transport
 layer — there is no incumbent to displace and no operator expecting
 BGP-like determinism — and that (3) and (4) are addressable with signed
 receipts and per-identity influence caps. That bet may be wrong. It is at
@@ -97,12 +97,12 @@ least a specific bet, rather than an assumption that the idea is new.
 
 ### Named Data Networking / ICN
 
-NDN routes on *content names* rather than host addresses: a consumer
+NDN routes on _content names_ rather than host addresses: a consumer
 expresses interest in a name, and the network finds it, caching along the
 way.
 
 **Parallel:** NTL's `Gradient` scope is close in spirit — signals route
-toward nodes that have historically handled that *type*, which is
+toward nodes that have historically handled that _type_, which is
 type-directed rather than address-directed routing.
 
 **Differences:** NDN's names are hierarchical and its caching layer is
@@ -149,13 +149,13 @@ crypto — much of NTL's synapse and topology layers, already battle-tested.
 **Shares:** multi-transport, pluggable crypto, peer identity from public
 keys, no central registry.
 
-**Adds:** libp2p's DHT routing is *structural* — it routes by XOR distance
+**Adds:** libp2p's DHT routing is _structural_ — it routes by XOR distance
 in key space, which is deterministic and ignores whether a peer is actually
-good at handling your traffic. NTL's routing is *learned* from outcomes. NTL
+good at handling your traffic. NTL's routing is _learned_ from outcomes. NTL
 also adds activation backpressure and transform-at-synapse, neither of which
 libp2p addresses.
 
-**Honest assessment:** NTL could plausibly have been built *on* libp2p
+**Honest assessment:** NTL could plausibly have been built _on_ libp2p
 rather than beside it, and a reasonable reviewer will ask why it was not.
 The answer is control over the synapse abstraction — libp2p connections are
 not weighted, stateful, learning objects — but this is a real trade-off
@@ -237,20 +237,20 @@ start settling the first and third.
 
 ## References
 
-- Boyan, J. & Littman, M. (1994). *Packet Routing in Dynamically Changing
-  Networks: A Reinforcement Learning Approach.* NIPS.
-- Di Caro, G. & Dorigo, M. (1998). *AntNet: Distributed Stigmergetic Control
-  for Communications Networks.* JAIR.
-- Zhang, L. et al. (2014). *Named Data Networking.* ACM SIGCOMM CCR.
-- Burleigh, S. et al. (2021). *Bundle Protocol Version 7.* RFC 9171.
-- Lindgren, A. et al. (2003). *Probabilistic Routing in Intermittently
-  Connected Networks.* SIGMOBILE.
-- Sutton, R. & Barto, A. (2018). *Reinforcement Learning: An Introduction*,
+- Boyan, J. & Littman, M. (1994). _Packet Routing in Dynamically Changing
+  Networks: A Reinforcement Learning Approach._ NIPS.
+- Di Caro, G. & Dorigo, M. (1998). _AntNet: Distributed Stigmergetic Control
+  for Communications Networks._ JAIR.
+- Zhang, L. et al. (2014). _Named Data Networking._ ACM SIGCOMM CCR.
+- Burleigh, S. et al. (2021). _Bundle Protocol Version 7._ RFC 9171.
+- Lindgren, A. et al. (2003). _Probabilistic Routing in Intermittently
+  Connected Networks._ SIGMOBILE.
+- Sutton, R. & Barto, A. (2018). _Reinforcement Learning: An Introduction_,
   2nd ed. — contextual bandits and exploration policies.
 
 ---
 
-*Prior Art — The Bundu Foundation*
+_Prior Art — The Bundu Foundation_
 
-*"Standing on the shoulders of giants is only useful if you admit whose
-shoulders they are."*
+_"Standing on the shoulders of giants is only useful if you admit whose
+shoulders they are."_

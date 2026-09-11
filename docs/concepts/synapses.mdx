@@ -5,17 +5,18 @@ description: "A synapse is a persistent weighted connection between two NTL node
 "og:description": "Synapses are persistent, stateful, weighted connections between NTL nodes that determine how signals flow through the network."
 "twitter:title": "NTL Synapses"
 ---
+
 A **synapse** is a persistent, stateful, weighted connection between two NTL nodes. Synapses are the edges in the neural graph — they determine how signals flow through the network.
 
 ## How Synapses Differ from Connections
 
-| Property | HTTP Connection | WebSocket | NTL Synapse |
-|---|---|---|---|
-| State | Stateless | Session state | Weighted, learning |
-| Lifetime | Per-request | Session duration | Persistent, evolving |
-| Direction | Client → Server | Bidirectional | Bidirectional |
-| Adaptation | None | None | Strengthens/weakens with use |
-| Memory | None | In-memory only | Persisted to the storage backend |
+| Property   | HTTP Connection | WebSocket        | NTL Synapse                      |
+| ---------- | --------------- | ---------------- | -------------------------------- |
+| State      | Stateless       | Session state    | Weighted, learning               |
+| Lifetime   | Per-request     | Session duration | Persistent, evolving             |
+| Direction  | Client → Server | Bidirectional    | Bidirectional                    |
+| Adaptation | None            | None             | Strengthens/weakens with use     |
+| Memory     | None            | In-memory only   | Persisted to the storage backend |
 
 The key difference: **synapses learn.** A synapse that frequently carries successful signals becomes stronger, meaning it gets priority for future signal propagation. A synapse that goes unused weakens and eventually prunes. This mirrors Hebbian learning in neuroscience — connections that fire together wire together.
 
@@ -83,6 +84,7 @@ An active synapse transmits signals bidirectionally. With each successful signal
 ### 4. Strengthening
 
 Weight increases when:
+
 - Signals are successfully transmitted and acknowledged
 - High-weight signals traverse the synapse
 - The remote node provides valuable responses (as determined by the application layer)
@@ -98,6 +100,7 @@ new_weight = min(
 ### 5. Weakening
 
 Weight decreases when:
+
 - Time passes without signal activity (decay)
 - Signals fail or time out
 - The remote node becomes unreliable
@@ -123,13 +126,13 @@ After a configurable dormancy period (default: 7 days), dormant synapses are pru
 
 Synapses are transport-agnostic. The actual bytes move over a configurable transport layer:
 
-| Transport | Use Case | Properties | Status |
-|---|---|---|---|
-| TCP | Everything, today | Reliable, widely supported | **Implemented** |
-| QUIC | Intended default for internet | Multiplexed, encrypted, low latency | Design |
-| Unix Socket | Same-machine nodes | Zero network overhead | Design |
-| Bluetooth LE | Proximity mesh | Offline-capable, IoT | Design |
-| Custom | Specialized | Application-defined | Design |
+| Transport    | Use Case                      | Properties                          | Status          |
+| ------------ | ----------------------------- | ----------------------------------- | --------------- |
+| TCP          | Everything, today             | Reliable, widely supported          | **Implemented** |
+| QUIC         | Intended default for internet | Multiplexed, encrypted, low latency | Design          |
+| Unix Socket  | Same-machine nodes            | Zero network overhead               | Design          |
+| Bluetooth LE | Proximity mesh                | Offline-capable, IoT                | Design          |
+| Custom       | Specialized                   | Application-defined                 | Design          |
 
 <Warning>
   **The reference implementation is TCP-only, and performs no transport
@@ -137,15 +140,16 @@ Synapses are transport-agnostic. The actual bytes move over a configurable trans
   authenticated handshake over it; there is no step at which transports are
   advertised or selected.
 
-  QUIC is the intended default, for good reasons — multiplexing many signal
-  streams over one connection, built-in encryption, and connection migration
-  across network changes, all of which matter for mobile and intermittent
-  links. None of it is written yet.
+QUIC is the intended default, for good reasons — multiplexing many signal
+streams over one connection, built-in encryption, and connection migration
+across network changes, all of which matter for mobile and intermittent
+links. None of it is written yet.
 
-  `[synapse.transport]` is commented out of `config.example.toml` for this
-  reason: `preferred` and `fallback` were read by nothing, and `preferred =
+`[synapse.transport]` is commented out of `config.example.toml` for this
+reason: `preferred` and `fallback` were read by nothing, and `preferred =
   "quic"` named a transport that does not exist. Tracking:
-  [openNTL/ntl#15](https://github.com/openNTL/ntl/issues/15).
+[openNTL/ntl#15](https://github.com/openNTL/ntl/issues/15).
+
 </Warning>
 
 ## Synapse Topology

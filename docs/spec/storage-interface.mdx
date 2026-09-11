@@ -5,6 +5,7 @@ description: "Normative contract for NTL storage backends — what a node must p
 "og:description": "What an NTL storage backend must persist, durability expectations per deployment class, and what may be held in memory only."
 "twitter:title": "NTL Storage Interface Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -30,11 +31,11 @@ devices. Nothing in the protocol privileges it.
 Durability requirements differ by deployment class. A backend declares which
 guarantee it provides; the runtime does not request one.
 
-| Class | Typical backend | Required durability |
-|---|---|---|
-| **Edge node** | SQLite | `best-effort` — MUST survive process restart |
-| **Full node** | PostgreSQL, SQLite | `durable` — MUST survive power loss |
-| **Ephemeral node** | in-memory | `memory` — MAY lose everything on exit |
+| Class              | Typical backend    | Required durability                          |
+| ------------------ | ------------------ | -------------------------------------------- |
+| **Edge node**      | SQLite             | `best-effort` — MUST survive process restart |
+| **Full node**      | PostgreSQL, SQLite | `durable` — MUST survive power loss          |
+| **Ephemeral node** | in-memory          | `memory` — MAY lose everything on exit       |
 
 An implementation MUST report its durability class honestly. Reporting
 `durable` while buffering writes in volatile memory is a conformance
@@ -190,15 +191,15 @@ when it is not will discover this during an incident.
 
 ## What MAY Be Memory-Only
 
-| State | Edge node | Full node |
-|---|---|---|
-| Synapse weights, affinity | MUST persist | MUST persist |
-| Topology knowledge | MUST persist | MUST persist |
-| Dedup cache | MAY be memory-only | SHOULD persist |
-| Activation snapshot | MAY be memory-only | SHOULD persist |
-| Learning journal | MUST persist if learning | MUST persist if learning |
-| Influence accounting | MUST persist if learning | MUST persist if learning |
-| Signal history | MAY omit | MAY omit |
+| State                     | Edge node                | Full node                |
+| ------------------------- | ------------------------ | ------------------------ |
+| Synapse weights, affinity | MUST persist             | MUST persist             |
+| Topology knowledge        | MUST persist             | MUST persist             |
+| Dedup cache               | MAY be memory-only       | SHOULD persist           |
+| Activation snapshot       | MAY be memory-only       | SHOULD persist           |
+| Learning journal          | MUST persist if learning | MUST persist if learning |
+| Influence accounting      | MUST persist if learning | MUST persist if learning |
+| Signal history            | MAY omit                 | MAY omit                 |
 
 An edge node MAY hold the dedup cache in memory: losing it on restart
 re-admits duplicates for one TTL window, which is a bounded and acceptable
@@ -231,13 +232,13 @@ reimplementation MAY expose an async interface.
 
 A backend reports failure in five categories:
 
-| Condition | Runtime response |
-|---|---|
-| `unavailable` — backend unreachable | Node MUST stop accepting new signals; MUST NOT route on stale state |
-| `migration` — schema migration failed | Node MUST NOT start |
-| `corrupt` — record cannot be decoded | Node SHOULD quarantine the record and continue |
-| `write` — write failed | Node MUST treat the affected learning update as not applied |
-| `unsupported` — optional capability absent | Node MUST proceed without that capability |
+| Condition                                  | Runtime response                                                    |
+| ------------------------------------------ | ------------------------------------------------------------------- |
+| `unavailable` — backend unreachable        | Node MUST stop accepting new signals; MUST NOT route on stale state |
+| `migration` — schema migration failed      | Node MUST NOT start                                                 |
+| `corrupt` — record cannot be decoded       | Node SHOULD quarantine the record and continue                      |
+| `write` — write failed                     | Node MUST treat the affected learning update as not applied         |
+| `unsupported` — optional capability absent | Node MUST proceed without that capability                           |
 
 A failed weight update MUST NOT be silently dropped: a node whose store is
 rejecting writes is a node that has stopped learning, and it MUST surface
@@ -262,11 +263,11 @@ concurrency and durability requirements are not fully mechanically checkable.
 
 ## Reference Backends
 
-| Crate | Backend | Status |
-|---|---|---|
-| `ntl-core` (`MemoryStore`) | in-memory | Reference semantics |
-| `ntl-store-sqlite` | SQLite | Default for edge and full nodes |
-| `ntl-store-postgres` | PostgreSQL | Planned |
+| Crate                      | Backend    | Status                          |
+| -------------------------- | ---------- | ------------------------------- |
+| `ntl-core` (`MemoryStore`) | in-memory  | Reference semantics             |
+| `ntl-store-sqlite`         | SQLite     | Default for edge and full nodes |
+| `ntl-store-postgres`       | PostgreSQL | Planned                         |
 
 Graph-native and KV backends implement the same contract; see
 [storage backends](/guides/storage-backends).

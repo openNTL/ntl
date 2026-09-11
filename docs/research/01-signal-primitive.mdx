@@ -26,12 +26,12 @@ The signal primitive is not code that simulates neural behaviour. It IS a neural
 
 ### Existing Primitives
 
-| Primitive | Model | Routing | Transform | Learning | Hardware |
-|-----------|-------|---------|-----------|----------|----------|
-| Channel | CSP | Addressed | None | None | CPU only |
-| Actor | Actor model | Addressed | App logic | None | CPU only |
-| Stream | Reactive | Pipeline | Operators | None | CPU only |
-| **Signal** | **Neural** | **Topological** | **At synapse** | **Hebbian + gradient** | **CPU + NPU** |
+| Primitive  | Model       | Routing         | Transform      | Learning               | Hardware      |
+| ---------- | ----------- | --------------- | -------------- | ---------------------- | ------------- |
+| Channel    | CSP         | Addressed       | None           | None                   | CPU only      |
+| Actor      | Actor model | Addressed       | App logic      | None                   | CPU only      |
+| Stream     | Reactive    | Pipeline        | Operators      | None                   | CPU only      |
+| **Signal** | **Neural**  | **Topological** | **At synapse** | **Hebbian + gradient** | **CPU + NPU** |
 
 No existing primitive supports unaddressed emission, weighted propagation, junction transformation, activation thresholds, connection learning, or hardware neural engine acceleration.
 
@@ -187,12 +187,12 @@ A weighted synapse can only consider `signal_weight * synapse_weight`. The neura
 
 On devices with NPUs:
 
-| Device | NPU | Performance |
-|--------|-----|-------------|
-| iPhone (A14+) | Apple Neural Engine | 15.8 TOPS, nanosecond inference |
-| Android (Snapdragon 8 Gen 2+) | Qualcomm Hexagon | 12.4 TOPS |
-| Android (Exynos 2400+) | Samsung NPU | 14.7 TOPS |
-| Huawei (Kirin 9000+) | Da Vinci NPU | 8 TOPS |
+| Device                        | NPU                 | Performance                     |
+| ----------------------------- | ------------------- | ------------------------------- |
+| iPhone (A14+)                 | Apple Neural Engine | 15.8 TOPS, nanosecond inference |
+| Android (Snapdragon 8 Gen 2+) | Qualcomm Hexagon    | 12.4 TOPS                       |
+| Android (Exynos 2400+)        | Samsung NPU         | 14.7 TOPS                       |
+| Huawei (Kirin 9000+)          | Da Vinci NPU        | 8 TOPS                          |
 
 TOPS = Trillion Operations Per Second. NTL's routing model is tiny (hundreds of parameters, not billions). A single routing inference on any of these NPUs takes nanoseconds and consumes negligible battery.
 
@@ -284,17 +284,17 @@ assumption NTL makes about any of them.
 
 ## 8. Implementation Roadmap
 
-| Phase | Deliverable | Hardware |
-|-------|-------------|----------|
-| 1 | `ntl-signal` crate: Node, Signal, Synapse, in-process transport | CPU only |
-| 2 | Routing model: ONNX-based neural routing | CPU (ONNX Runtime) |
-| 3 | Hardware acceleration: NPU integration | Apple Neural Engine, Qualcomm Hexagon |
-| 4 | Local + network transport layers | CPU + NPU |
-| 5 | Fabric layer with IPv6 | CPU + NPU |
-| 6 | Advanced principles: inhibition, recurrence, neuromodulation | CPU + NPU |
+| Phase | Deliverable                                                     | Hardware                              |
+| ----- | --------------------------------------------------------------- | ------------------------------------- |
+| 1     | `ntl-signal` crate: Node, Signal, Synapse, in-process transport | CPU only                              |
+| 2     | Routing model: ONNX-based neural routing                        | CPU (ONNX Runtime)                    |
+| 3     | Hardware acceleration: NPU integration                          | Apple Neural Engine, Qualcomm Hexagon |
+| 4     | Local + network transport layers                                | CPU + NPU                             |
+| 5     | Fabric layer with IPv6                                          | CPU + NPU                             |
+| 6     | Advanced principles: inhibition, recurrence, neuromodulation    | CPU + NPU                             |
 
 ---
 
-*Signal Primitive Design — April 2026 — The Bundu Foundation*
+_Signal Primitive Design — April 2026 — The Bundu Foundation_
 
-*"Not a simulation of a neural network. It IS a neural network."*
+_"Not a simulation of a neural network. It IS a neural network."_

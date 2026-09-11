@@ -1,6 +1,6 @@
 # Neural Transfer Layer (NTL)
 
-**The Neural Transfer Layer for Modern Compute**
+> The Neural Transfer Layer for Modern Compute
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Spec Version](https://img.shields.io/badge/spec-beta__0.0.0-blue.svg)](https://openntl.org/spec/overview)
@@ -145,7 +145,7 @@ network.
 
 We welcome contributions from anyone, anywhere. See [CONTRIBUTING.md](CONTRIBUTING.md) and our [contribution guide](https://openntl.org/governance/contributing).
 
-NTL is built on the Ubuntu philosophy — *"I am because we are."*
+NTL is built on the Ubuntu philosophy — _"I am because we are."_
 
 ## Built by The Bundu Foundation
 
@@ -157,12 +157,12 @@ beyond. It is listed among the Foundation's projects at
 > **Neural Transfer Layer (NTL)** — Signal-based data transfer for
 > decentralised networks. Replaces APIs with neural propagation.
 
-| Entity | Role |
-|---|---|
-| [The Bundu Foundation](https://www.bundu.org) | Owner and steward |
+| Entity                                        | Role                                  |
+| --------------------------------------------- | ------------------------------------- |
+| [The Bundu Foundation](https://www.bundu.org) | Owner and steward                     |
 | [Nyuchi Web Services](https://nws.nyuchi.com) | Engineering, reference implementation |
-| [Nyuchi Africa](https://www.nyuchi.com) | Core maintainer |
-| [Mukoko Africa](https://mukoko.com) | Core maintainer |
+| [Nyuchi Africa](https://www.nyuchi.com)       | Core maintainer                       |
+| [Mukoko Africa](https://mukoko.com)           | Core maintainer                       |
 
 ### Sibling Foundation projects
 
@@ -170,14 +170,14 @@ NTL is storage-agnostic and depends on none of these. They are listed because
 several are natural companions, and because the Foundation's projects are
 designed to compose.
 
-| Project | What it is | Relationship to NTL |
-|---|---|---|
-| [SiafuDB](https://siafudb.org) | Embedded property graph database for device, edge, and Web3 environments; offline-first | One storage backend option |
-| SiafuDB-Kuzu | High-performance C++ graph database with Cypher and vector search | One storage backend option |
-| Nyuchi Honeycomb | Decentralized storage network for Web3 pods | Potential transport/storage peer |
-| Harare Metro | Open-source public-transport routing for Harare | Candidate application |
-| Mzizi | Open design system and 3D frontend architecture | Candidate application |
-| [Mukoko](https://mukoko.com) | Application platform | Application built on NTL |
+| Project                        | What it is                                                                              | Relationship to NTL              |
+| ------------------------------ | --------------------------------------------------------------------------------------- | -------------------------------- |
+| [SiafuDB](https://siafudb.org) | Embedded property graph database for device, edge, and Web3 environments; offline-first | One storage backend option       |
+| SiafuDB-Kuzu                   | High-performance C++ graph database with Cypher and vector search                       | One storage backend option       |
+| Nyuchi Honeycomb               | Decentralized storage network for Web3 pods                                             | Potential transport/storage peer |
+| Harare Metro                   | Open-source public-transport routing for Harare                                         | Candidate application            |
+| Mzizi                          | Open design system and 3D frontend architecture                                         | Candidate application            |
+| [Mukoko](https://mukoko.com)   | Application platform                                                                    | Application built on NTL         |
 
 ## License
 

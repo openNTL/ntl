@@ -43,6 +43,7 @@ If breaking, what migration path is available?
 ## Security Considerations
 
 What are the security implications of this change? Consider:
+
 - Signal integrity
 - Node identity
 - Network topology exposure

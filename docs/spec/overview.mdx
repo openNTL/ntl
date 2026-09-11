@@ -6,6 +6,7 @@ mode: "wide"
 "og:description": "The formal specification for the Neural Transfer Layer protocol, covering signals, synapses, propagation, activation, and cryptographic interfaces."
 "twitter:title": "NTL Specification"
 ---
+
 **Version:** beta_0.0.0
 **Status:** Beta
 **Authors:** The Bundu Foundation
@@ -28,9 +29,9 @@ made every implementation release look like a protocol revision.
 
 So:
 
-| What | Versioned as | Increments when |
-|---|---|---|
-| This specification | `beta_0.0.0` | A normative requirement is added, changed or removed |
+| What                         | Versioned as            | Increments when                                        |
+| ---------------------------- | ----------------------- | ------------------------------------------------------ |
+| This specification           | `beta_0.0.0`            | A normative requirement is added, changed or removed   |
 | The reference implementation | semver (`0.2.0-beta.1`) | Ordinary release cadence, independent of this document |
 
 The crates and npm packages must carry semver, because Cargo and npm require
@@ -112,14 +113,14 @@ This revision closes the gaps that made the routing claims uncheckable and
 the protocol unusable for transactional traffic, and it is the first revision
 whose requirements are all exercised by a running implementation.
 
-| Change | Document |
-|---|---|
-| Routing model given an explicit reward signal, update rule, decay, and exploration policy | **new** [learning-model](/spec/learning-model) |
-| Adversarial analysis of learned routing, with an explicit out-of-scope list | **new** [threat-model](/spec/threat-model) |
-| `acknowledged` delivery class — failure is always reported | **new** [delivery-semantics](/spec/delivery-semantics) |
-| Storage defined as a pluggable contract, not a named database | **new** [storage-interface](/spec/storage-interface) |
-| Firing ambiguity resolved; bounded queue and overflow policy specified; refractory period made a node-class parameter | [activation-model](/spec/activation-model) |
-| Deterministic top-N fanout replaced with stochastic sampling; receipt handling and outcome journalling added | [propagation-rules](/spec/propagation-rules) |
+| Change                                                                                                                | Document                                               |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Routing model given an explicit reward signal, update rule, decay, and exploration policy                             | **new** [learning-model](/spec/learning-model)         |
+| Adversarial analysis of learned routing, with an explicit out-of-scope list                                           | **new** [threat-model](/spec/threat-model)             |
+| `acknowledged` delivery class — failure is always reported                                                            | **new** [delivery-semantics](/spec/delivery-semantics) |
+| Storage defined as a pluggable contract, not a named database                                                         | **new** [storage-interface](/spec/storage-interface)   |
+| Firing ambiguity resolved; bounded queue and overflow policy specified; refractory period made a node-class parameter | [activation-model](/spec/activation-model)             |
+| Deterministic top-N fanout replaced with stochastic sampling; receipt handling and outcome journalling added          | [propagation-rules](/spec/propagation-rules)           |
 
 ## Design Goals
 

@@ -5,6 +5,7 @@ description: "Normative specification for NTL's online routing model — the rew
 "og:description": "How NTL routing weights are updated from delivery outcomes: reward signals, Hebbian update rule, decay, and exploration sampling."
 "twitter:title": "NTL Learning Model Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -74,14 +75,14 @@ receipts.
 Every propagation decision is journalled and later resolved to exactly one
 outcome. The reward `r` is bounded in `[-1, 1]`:
 
-| Outcome | Trigger | Reward `r` |
-|---|---|---|
-| `delivered` | Positive receipt observed | `+1.0` |
-| `pending` | Awaiting a receipt | `0.0` |
-| `timed_out` | No receipt within the aggregation window | `-0.25` |
-| `rejected` | Negative receipt observed | `-0.5` |
-| `transport_failure` | Send failed at the transport layer | `-0.5` |
-| `signature_failure` | Peer presented an unverifiable signature | `-1.0` |
+| Outcome             | Trigger                                  | Reward `r` |
+| ------------------- | ---------------------------------------- | ---------- |
+| `delivered`         | Positive receipt observed                | `+1.0`     |
+| `pending`           | Awaiting a receipt                       | `0.0`      |
+| `timed_out`         | No receipt within the aggregation window | `-0.25`    |
+| `rejected`          | Negative receipt observed                | `-0.5`     |
+| `transport_failure` | Send failed at the transport layer       | `-0.5`     |
+| `signature_failure` | Peer presented an unverifiable signature | `-1.0`     |
 
 Two properties are normative:
 
@@ -243,7 +244,7 @@ without floating-point exp.
 Under both policies:
 
 - A decision reached by exploration MUST be journalled with `explored =
-  true`. Exploration decisions carry information about paths the model
+true`. Exploration decisions carry information about paths the model
   currently underrates, and separating them lets an operator see whether the
   node is still exploring at all.
 - Synapses below `min_synapse_weight` for the scope remain excluded.
@@ -265,20 +266,20 @@ the `τ_min` in §5.
 Defaults per deployment class. A node MUST expose these as configuration and
 SHOULD report its effective values.
 
-| Parameter | Symbol | Edge | Full node | High-traffic |
-|---|---|---|---|---|
-| Learning rate | `η` | `0.05` | `0.02` | `0.01` |
-| Decay half-life | `t½` | 7 days | 3 days | 24 hours |
-| Exploration temperature | `τ` | `0.15` | `0.10` | `0.05` |
-| Minimum temperature | `τ_min` | `0.02` | `0.02` | `0.01` |
-| ε (if ε-greedy) | `ε` | `0.10` | `0.05` | `0.02` |
-| Receipt aggregation window | `T_ack` | 30 s | 15 s | 5 s |
-| Minimum weight | `w_min` | `0.001` | `0.001` | `0.001` |
-| Maximum weight | `w_max` | `1.0` | `1.0` | `1.0` |
-| Total outbound budget | `W_max` | `8.0` | `32.0` | `128.0` |
-| Influence cap per peer | `C` | `0.20` | `0.10` | `0.05` |
-| Influence window | `T_infl` | 1 hour | 1 hour | 1 hour |
-| Max fanout | `k` | `3` | `5` | `8` |
+| Parameter                  | Symbol   | Edge    | Full node | High-traffic |
+| -------------------------- | -------- | ------- | --------- | ------------ |
+| Learning rate              | `η`      | `0.05`  | `0.02`    | `0.01`       |
+| Decay half-life            | `t½`     | 7 days  | 3 days    | 24 hours     |
+| Exploration temperature    | `τ`      | `0.15`  | `0.10`    | `0.05`       |
+| Minimum temperature        | `τ_min`  | `0.02`  | `0.02`    | `0.01`       |
+| ε (if ε-greedy)            | `ε`      | `0.10`  | `0.05`    | `0.02`       |
+| Receipt aggregation window | `T_ack`  | 30 s    | 15 s      | 5 s          |
+| Minimum weight             | `w_min`  | `0.001` | `0.001`   | `0.001`      |
+| Maximum weight             | `w_max`  | `1.0`   | `1.0`     | `1.0`        |
+| Total outbound budget      | `W_max`  | `8.0`   | `32.0`    | `128.0`      |
+| Influence cap per peer     | `C`      | `0.20`  | `0.10`    | `0.05`       |
+| Influence window           | `T_infl` | 1 hour  | 1 hour    | 1 hour       |
+| Max fanout                 | `k`      | `3`     | `5`       | `8`          |
 
 Rationale for the direction of travel: a high-traffic node sees more
 evidence per unit time, so it can afford a smaller learning rate (less
@@ -327,15 +328,15 @@ Repeat, and `A`'s share of `Query` traffic grows — bounded by `W_max`, by
 Stated explicitly because a learned system that does not document its
 failure modes cannot be operated safely.
 
-| Failure | Mechanism | Mitigation |
-|---|---|---|
-| Ossified routing | Greedy selection starves unselected paths | Probabilistic selection (§4.2), exploration floor (§4.3) |
-| Weight saturation | Additive updates inflate all weights | Outbound normalisation (§2.3) |
-| Weight poisoning | Attacker spams traffic to steer weights | Influence cap (§2.4), signed receipts (§1.1) |
-| Forged receipts | Attacker fabricates positive outcomes | Receipts MUST verify (§1.1 rule 5) |
-| Reward starvation | Nothing emits receipts; all decisions time out | Timeout is a real reward (§1.2); operators SHOULD alert on the pending ratio |
-| Thrash on lossy links | Loss read as routing failure | Timeout penalised more weakly than rejection (§1.2) |
-| Stale confidence | Weights outlive the topology | Mandatory decay (§3) |
+| Failure               | Mechanism                                      | Mitigation                                                                   |
+| --------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| Ossified routing      | Greedy selection starves unselected paths      | Probabilistic selection (§4.2), exploration floor (§4.3)                     |
+| Weight saturation     | Additive updates inflate all weights           | Outbound normalisation (§2.3)                                                |
+| Weight poisoning      | Attacker spams traffic to steer weights        | Influence cap (§2.4), signed receipts (§1.1)                                 |
+| Forged receipts       | Attacker fabricates positive outcomes          | Receipts MUST verify (§1.1 rule 5)                                           |
+| Reward starvation     | Nothing emits receipts; all decisions time out | Timeout is a real reward (§1.2); operators SHOULD alert on the pending ratio |
+| Thrash on lossy links | Loss read as routing failure                   | Timeout penalised more weakly than rejection (§1.2)                          |
+| Stale confidence      | Weights outlive the topology                   | Mandatory decay (§3)                                                         |
 
 Adversarial cases are treated in full in [threat-model](/spec/threat-model).
 

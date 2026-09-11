@@ -24,18 +24,23 @@ NTL runs on infrastructure — devices, networks, edge nodes — not GPUs. It ha
 ## The Five (PyTorch's subset)
 
 ### 1. Weighted Graph
+
 Nodes connected by weighted edges. The foundation of everything else. In NTL: infrastructure nodes connected by weighted synapses.
 
 ### 2. Forward Propagation
+
 Signals flow through the network from emitter to receivers. In NTL: data signals propagate through synapse topology from source to destinations.
 
 ### 3. Junction Transformation
+
 Data changes shape at each connection. In NTL: synapse functions transform signals — PII stripping, anonymisation, filtering, aggregation.
 
 ### 4. Learning
+
 Weights adjust based on outcomes. In NTL: Hebbian strengthening, gradient descent from delivery feedback, spike-timing-dependent plasticity.
 
 ### 5. Improvement Over Time
+
 The network gets better with experience. In NTL: routing optimises based on real traffic, deployment gets more efficient without reconfiguration.
 
 ---
@@ -79,6 +84,7 @@ The network gets better with experience. In NTL: routing optimises based on real
 **Biological:** The visual cortex has layers: V1 detects edges, V2 detects contours, V4 detects shapes, IT detects objects. Each level processes a more abstract representation. The levels operate simultaneously and exchange information laterally.
 
 **NTL:** Signals are processed at multiple abstraction levels simultaneously:
+
 - **Data level:** raw mutation (vertex created, edge updated)
 - **Pattern level:** traffic pattern (burst of engagements, sync backlog building)
 - **Intelligence level:** recommendation or adaptation decision (reroute traffic, adjust synapse weights)
@@ -101,16 +107,16 @@ These levels aren't sequential stages — they're parallel processing layers wit
 
 **NTL:** The network operates at multiple timescales:
 
-| Timescale | Process |
-|-----------|---------|
-| Nanoseconds | Routing model inference (NPU) |
-| Microseconds | Signal propagation (in-process) |
-| Milliseconds | Signal propagation (network) |
-| Seconds | Adaptive flow control |
-| Minutes | Training step (weight updates) |
-| Hours | Pattern learning |
-| Days | Topology evolution (new synapses, pruning) |
-| Weeks | Long-term optimisation, deployment-wide learning |
+| Timescale    | Process                                          |
+| ------------ | ------------------------------------------------ |
+| Nanoseconds  | Routing model inference (NPU)                    |
+| Microseconds | Signal propagation (in-process)                  |
+| Milliseconds | Signal propagation (network)                     |
+| Seconds      | Adaptive flow control                            |
+| Minutes      | Training step (weight updates)                   |
+| Hours        | Pattern learning                                 |
+| Days         | Topology evolution (new synapses, pruning)       |
+| Weeks        | Long-term optimisation, deployment-wide learning |
 
 Each timescale has its own mechanisms and its own feedback loops. Fast timescales handle individual signals. Slow timescales handle structural adaptation. The system is stable because fast processes operate within the constraints set by slow processes, while slow processes adapt based on patterns observed in fast processes.
 
@@ -120,14 +126,14 @@ Each timescale has its own mechanisms and its own feedback loops. Fast timescale
 
 Not all twelve principles are needed in v1. The implementation order based on impact and feasibility:
 
-| Phase | Principles | Why First |
-|-------|-----------|-----------|
-| v1 | 1-5 (weighted graph, propagation, transformation, learning, improvement) | Foundation. Must work. |
-| v2 | 11 (sparse activation), 12 (multi-scale temporality) | Battery and performance. Critical for mobile. |
-| v3 | 6 (inhibition), 7 (recurrence) | Traffic management and context circulation. |
-| v4 | 9 (rich plasticity), 10 (hierarchical processing) | Advanced routing intelligence. |
-| v5 | 8 (neuromodulation) | Network-wide adaptive behaviour. |
+| Phase | Principles                                                               | Why First                                     |
+| ----- | ------------------------------------------------------------------------ | --------------------------------------------- |
+| v1    | 1-5 (weighted graph, propagation, transformation, learning, improvement) | Foundation. Must work.                        |
+| v2    | 11 (sparse activation), 12 (multi-scale temporality)                     | Battery and performance. Critical for mobile. |
+| v3    | 6 (inhibition), 7 (recurrence)                                           | Traffic management and context circulation.   |
+| v4    | 9 (rich plasticity), 10 (hierarchical processing)                        | Advanced routing intelligence.                |
+| v5    | 8 (neuromodulation)                                                      | Network-wide adaptive behaviour.              |
 
 ---
 
-*The Twelve Principles — April 2026 — The Bundu Foundation*
+_The Twelve Principles — April 2026 — The Bundu Foundation_

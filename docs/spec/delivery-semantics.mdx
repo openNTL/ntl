@@ -5,6 +5,7 @@ description: "Normative specification for NTL delivery classes: best-effort vers
 "og:description": "NTL delivery classes: best-effort and acknowledged at-least-once delivery with receipts, retry policy, and idempotency via signal ID."
 "twitter:title": "NTL Delivery Semantics Spec"
 ---
+
 **Version:** beta_0.0.0
 
 ## Overview
@@ -23,9 +24,9 @@ served, and so that an application can tell which one it is getting.
 Every signal carries exactly one delivery class. It is part of the signed
 signal body, so an intermediate node cannot downgrade it.
 
-| Class | Guarantee | Failure is | Use for |
-|---|---|---|---|
-| `best-effort` | None. May be silently absorbed. | Invisible | Analytics, discovery, heartbeats, telemetry |
+| Class          | Guarantee                                     | Failure is          | Use for                                                 |
+| -------------- | --------------------------------------------- | ------------------- | ------------------------------------------------------- |
+| `best-effort`  | None. May be silently absorbed.               | Invisible           | Analytics, discovery, heartbeats, telemetry             |
 | `acknowledged` | At-least-once, or the sender learns it failed | **Always reported** | Orders, payments, commands, anything with a side effect |
 
 `best-effort` MUST be the default, so that existing behaviour is unchanged
@@ -70,15 +71,15 @@ the whole substance of the class.
 A node that would drop an `acknowledged` signal MUST instead emit a negative
 receipt toward `signal.origin`, with a reason:
 
-| Reason | Condition |
-|---|---|
-| `below_threshold` | Weight fell below `min_propagation_weight` |
-| `ttl_exhausted` | TTL reached zero at a node that cannot handle it |
-| `no_route` | No candidate synapse passed scope filtering |
+| Reason              | Condition                                                         |
+| ------------------- | ----------------------------------------------------------------- |
+| `below_threshold`   | Weight fell below `min_propagation_weight`                        |
+| `ttl_exhausted`     | TTL reached zero at a node that cannot handle it                  |
+| `no_route`          | No candidate synapse passed scope filtering                       |
 | `transport_failure` | Candidates were chosen, but no connection to any of them was live |
-| `queue_full` | Activation queue full and overflow policy selected this signal |
-| `unsupported_type` | Node cannot handle the type and cannot forward it |
-| `refused` | Policy declined the signal |
+| `queue_full`        | Activation queue full and overflow policy selected this signal    |
+| `unsupported_type`  | Node cannot handle the type and cannot forward it                 |
+| `refused`           | Policy declined the signal                                        |
 
 In particular, **`min_propagation_weight` MUST NOT silently absorb an
 `acknowledged` signal.** This is the single most important rule in this
@@ -115,12 +116,12 @@ Default policy: exponential backoff with full jitter.
 attempt n delay  =  random(0, min(base · 2ⁿ, cap))
 ```
 
-| Parameter | Default |
-|---|---|
-| `base` | 1 s |
-| `cap` | 30 s |
-| `max_attempts` | 5 |
-| `total_deadline` | 300 s |
+| Parameter        | Default |
+| ---------------- | ------- |
+| `base`           | 1 s     |
+| `cap`            | 30 s    |
+| `max_attempts`   | 5       |
+| `total_deadline` | 300 s   |
 
 Rules:
 
@@ -166,7 +167,7 @@ deduplication then makes that practical rather than automatic.
 ## 5. Ordering
 
 Neither class provides ordering. Signals may arrive in any order, and
-stochastic path selection makes reordering *likely* rather than merely
+stochastic path selection makes reordering _likely_ rather than merely
 possible.
 
 Applications requiring order MUST sequence at the application layer.
@@ -176,15 +177,15 @@ clocks across nodes are not synchronised.
 
 ## 6. Interaction With Other Mechanisms
 
-| Mechanism | `best-effort` | `acknowledged` |
-|---|---|---|
+| Mechanism                           | `best-effort`     | `acknowledged`                             |
+| ----------------------------------- | ----------------- | ------------------------------------------ |
 | `min_propagation_weight` absorption | Permitted, silent | **Prohibited** — negative receipt required |
-| Attenuation below threshold | Permitted | Clamped (§2.3) |
-| Queue overflow drop | Permitted, silent | Negative receipt required |
-| TTL exhaustion | Silent | Negative receipt required |
-| Activation refractory delay | Permitted | Permitted — delay is not loss |
-| Receipt emission | Optional | REQUIRED |
-| Journal entry | SHOULD | MUST |
+| Attenuation below threshold         | Permitted         | Clamped (§2.3)                             |
+| Queue overflow drop                 | Permitted, silent | Negative receipt required                  |
+| TTL exhaustion                      | Silent            | Negative receipt required                  |
+| Activation refractory delay         | Permitted         | Permitted — delay is not loss              |
+| Receipt emission                    | Optional          | REQUIRED                                   |
+| Journal entry                       | SHOULD            | MUST                                       |
 
 Note the last row. Because `acknowledged` signals always resolve to a
 definite outcome, they are the highest-quality training data the routing

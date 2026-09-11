@@ -5,6 +5,7 @@ description: "How an NTL node decides when to process a signal: accumulated pote
 "og:description": "How NTL nodes decide whether to process incoming signals using biologically-inspired threshold models instead of traditional rate limiting."
 "twitter:title": "NTL Activation"
 ---
+
 **Activation** is the mechanism by which NTL nodes decide whether to process an incoming signal. It replaces traditional rate limiting, load balancing, and routing logic with a biologically-inspired threshold model.
 
 ## The Activation Model
@@ -29,13 +30,13 @@ Traditional rate limiting is crude: it counts requests per time window and rejec
 
 Activation thresholds solve all of these:
 
-| Problem | Rate Limiting | Activation |
-|---|---|---|
-| Signal priority | All equal | Weight-based priority |
-| Adaptation | Fixed windows | Dynamic threshold |
-| Failure mode | Hard reject (429) | Graceful accumulation |
-| Backpressure | None (client retries) | Natural (signals queue) |
-| Spam resistance | IP-based blocking | Weight attenuation |
+| Problem         | Rate Limiting         | Activation              |
+| --------------- | --------------------- | ----------------------- |
+| Signal priority | All equal             | Weight-based priority   |
+| Adaptation      | Fixed windows         | Dynamic threshold       |
+| Failure mode    | Hard reject (429)     | Graceful accumulation   |
+| Backpressure    | None (client retries) | Natural (signals queue) |
+| Spam resistance | IP-based blocking     | Weight attenuation      |
 
 ## Activation Mechanics
 

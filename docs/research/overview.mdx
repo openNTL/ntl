@@ -6,22 +6,23 @@ mode: "wide"
 "og:description": "The research documents that shaped NTL — why it's designed as an actual neural network, why the signal is a concurrency primitive, and why IPv6 is a hard requirement."
 "twitter:title": "NTL Research"
 ---
-These are the research documents that shaped NTL. They sit alongside the polished protocol docs and are intentionally rawer — they capture the *why* behind the architecture, not only the *what*.
+
+These are the research documents that shaped NTL. They sit alongside the polished protocol docs and are intentionally rawer — they capture the _why_ behind the architecture, not only the _what_.
 
 Read these when you want to understand why NTL is designed as an actual neural network rather than a messaging protocol, why the signal is a new concurrency primitive rather than a message type, and why IPv6 is a hard requirement rather than a preference.
 
-| # | Document | What it covers |
-|---|----------|----------------|
-| 01 | [The Signal Primitive](/research/01-signal-primitive) | A new concurrency primitive. Nodes, signals, synapses as the NTL triad. |
-| 02 | [Machine Learning at the Transfer Layer](/research/02-machine-learning-principles) | PyTorch for applications; NTL for networks. ML as infrastructure. |
-| 03 | [Neural Network as Base Layer](/research/03-neural-network-base-layer) | The routing engine *is* a neural network, executable on NPU silicon. |
-| 04 | [Network Transport & IPv6](/research/04-network-transport-ipv6) | Why GSPN's fabric layer cannot live on IPv4 NAT. |
-| 05 | [The Twelve Principles](/research/05-twelve-principles) | The full neural repertoire beyond PyTorch's five. |
-| 06 | [First Steps](/research/06-first-steps) | The concrete path from now to research preview. |
+| #   | Document                                                                           | What it covers                                                          |
+| --- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| 01  | [The Signal Primitive](/research/01-signal-primitive)                              | A new concurrency primitive. Nodes, signals, synapses as the NTL triad. |
+| 02  | [Machine Learning at the Transfer Layer](/research/02-machine-learning-principles) | PyTorch for applications; NTL for networks. ML as infrastructure.       |
+| 03  | [Neural Network as Base Layer](/research/03-neural-network-base-layer)             | The routing engine _is_ a neural network, executable on NPU silicon.    |
+| 04  | [Network Transport & IPv6](/research/04-network-transport-ipv6)                    | Why GSPN's fabric layer cannot live on IPv4 NAT.                        |
+| 05  | [The Twelve Principles](/research/05-twelve-principles)                            | The full neural repertoire beyond PyTorch's five.                       |
+| 06  | [First Steps](/research/06-first-steps)                                            | The concrete path from now to research preview.                         |
 
 ---
 
-*NTL is a transport layer and specifies storage only as an interface. For
+_NTL is a transport layer and specifies storage only as an interface. For
 complementary work on graph-native storage, see
 [siafudb.org](https://siafudb.org) — one ecosystem backend among several, not
-a dependency.*
+a dependency._
