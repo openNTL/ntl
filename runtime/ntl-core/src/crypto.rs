@@ -383,7 +383,7 @@ mod tests {
             let mut signal = Signal::data("test").with_weight(0.5).build_unsigned(origin);
 
             sign_signal(&ClassicalModule, &mut signal, &private).expect("sign");
-            assert!(!signal.signature.is_empty());
+            assert_ne!(signal.signature, [] as [u8; 0]);
             assert!(verify_signal(&ClassicalModule, &signal, &public).expect("verify"));
         }
 

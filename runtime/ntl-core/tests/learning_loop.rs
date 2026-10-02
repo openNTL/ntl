@@ -755,7 +755,10 @@ fn a_refused_arrival_does_not_discard_the_batch_it_fired() {
             disposition.queued,
             "0.01 must sit below the threshold: {disposition:?}"
         );
-        assert!(disposition.handle_locally.is_empty());
+        assert_eq!(
+            disposition.handle_locally,
+            [] as [ntl_core::activation::QueuedSignal; 0]
+        );
         queued.push(arrived.id);
     }
 
@@ -812,7 +815,10 @@ fn a_dedup_hit_is_not_reported_as_queued() {
         !second.queued,
         "a duplicate is dropped, not queued, so its body must not be retained"
     );
-    assert!(second.handle_locally.is_empty());
+    assert_eq!(
+        second.handle_locally,
+        [] as [ntl_core::activation::QueuedSignal; 0]
+    );
     assert!(second.rejected.is_none(), "dedup is silent, not a refusal");
 }
 
