@@ -4,7 +4,7 @@
 
 **Do not open a public issue for security vulnerabilities.**
 
-Report vulnerabilities privately to **<security@openntl.org>**. Include:
+Report vulnerabilities privately to **<security@nyuchi.com>**. Include:
 
 - A description of the issue and its impact
 - Steps to reproduce, or a proof of concept

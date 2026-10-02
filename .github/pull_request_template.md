@@ -55,5 +55,5 @@ identity binding, the influence caps, dedup, or the MCP server's read-only
 enforcement.
 
 Never open a PR that is itself the disclosure of an exploitable vulnerability.
-Mail security@openntl.org first — SECURITY.md has the process.
+Mail security@nyuchi.com first — SECURITY.md has the process.
 -->
