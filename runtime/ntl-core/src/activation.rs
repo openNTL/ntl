@@ -839,7 +839,7 @@ mod tests {
         // Force potential high, then drain, then confirm no spurious fire.
         st.admit(sig(1, 1.0), 1.0, 0, &mut rng);
         assert!(st.drain_batch(0).len() <= 1);
-        assert!(st.drain_batch(0).is_empty());
+        assert_eq!(st.drain_batch(0), [] as [QueuedSignal; 0]);
     }
 
     // -- refractory --------------------------------------------------------

@@ -253,7 +253,7 @@ fn every_sample_on_the_node_page_compiles_and_runs() {
     assert_eq!(node.now_ns(), 1_700_000_000_000_000_000);
 
     let (identity, max_synapses, now_ns) = inspecting_a_node(&node);
-    assert!(!identity.is_empty());
+    assert_ne!(identity, "");
     assert!(max_synapses > 0);
     assert_eq!(now_ns, node.now_ns());
 

@@ -113,11 +113,11 @@ fn reading_fields(node: &Node, signal: &Signal) {
     assert_eq!(signal.version, 1);
     assert_eq!(signal.encoding, Encoding::Cbor);
     assert!(signal.timestamp > 0);
-    assert!(signal.trace.is_empty());
+    assert_eq!(signal.trace, [] as [ntl_core::NodeId; 0]);
 
     // `emit` stamps identity, not a signature. Signing happens before
     // transmission, over `signing_bytes()`.
-    assert!(signal.signature.is_empty());
+    assert_eq!(signal.signature, [] as [u8; 0]);
 }
 
 /// A signal is not valid until it is signed.

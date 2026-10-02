@@ -256,10 +256,10 @@ fn custom_signal_types_round_trip_through_the_journal() {
     assert!(recent[0].explored, "the exploration flag must round-trip");
 
     // And must not be confused with a built-in type.
-    assert!(
+    assert_eq!(
         s.recent_decisions(Some(&SignalType::Data), 10)
-            .expect("recent")
-            .is_empty()
+            .expect("recent"),
+        [] as [ntl_core::store::JournalEntry; 0]
     );
 }
 

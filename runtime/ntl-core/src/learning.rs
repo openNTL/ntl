@@ -832,8 +832,14 @@ mod tests {
     fn sampling_handles_degenerate_inputs() {
         let mut rng = SplitMix64::seeded(2);
         let c = cfg();
-        assert!(sample_paths(&[], 3, ExplorationPolicy::Softmax, &c, &mut rng).is_empty());
-        assert!(sample_paths(&[0.5], 0, ExplorationPolicy::Softmax, &c, &mut rng).is_empty());
+        assert_eq!(
+            sample_paths(&[], 3, ExplorationPolicy::Softmax, &c, &mut rng),
+            [] as [Selection; 0]
+        );
+        assert_eq!(
+            sample_paths(&[0.5], 0, ExplorationPolicy::Softmax, &c, &mut rng),
+            [] as [Selection; 0]
+        );
         // k larger than the candidate set must not panic.
         let picks = sample_paths(&[0.5, 0.4], 10, ExplorationPolicy::Softmax, &c, &mut rng);
         assert_eq!(picks.len(), 2);
