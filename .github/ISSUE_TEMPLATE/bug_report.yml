@@ -7,7 +7,7 @@ body:
     attributes:
       value: >-
         **Not for security vulnerabilities.** If this is exploitable, close this
-        and mail security@openntl.org instead — a public issue tells an attacker
+        and mail security@nyuchi.com instead — a public issue tells an attacker
         before it tells us.
 
   - type: dropdown
