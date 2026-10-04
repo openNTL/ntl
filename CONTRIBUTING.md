@@ -121,6 +121,21 @@ Use conventional commits:
 - `ci:` CI/CD changes
 - `chore:` maintenance
 
+## Versioning
+
+From 2026-10-04 releases follow the org versioning policy
+([nyuchi/.github#80](https://github.com/nyuchi/.github/issues/80)):
+
+- A merge into `staging` is a patch (x.y.z → x.y.z+1), tagged automatically.
+- A release to `main` is a minor (x.y.z → x.y+1.0). The releasing PR sets the
+  version in `Cargo.toml`, `npm/ntl-cli/package.json` and
+  `mcp/ntl-postgres-mcp-server/package.json` to the next minor above the
+  highest released tag. The release workflow refuses any other version.
+- A major is only released by hand: run the Release workflow with
+  `bump: major`. Each segment holds 0–999.
+
+Versions released before then are not renumbered.
+
 ## Code of Conduct
 
 All participants are expected to treat each other with respect, kindness, and good faith. We are building infrastructure for everyone.
