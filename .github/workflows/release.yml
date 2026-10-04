@@ -14,6 +14,13 @@ name: Release
 #   - a `v*` tag push, for releasing a commit that is not main's head;
 #   - a dispatch, which rehearses by default and publishes only with
 #     dry_run explicitly false.
+#
+# The version follows the org versioning policy (nyuchi/.github#80): a release
+# to main is the next MINOR above the highest released tag (x.y.z -> x.y+1.0);
+# merges into staging are tagged as patches by staging-version.yml; a MAJOR is
+# only released by hand (dispatch with bump: major). Each segment holds
+# 0..999. The shared next-version action refuses any other version in the
+# verify job, before anything is built or published.
 on:
   push:
     branches: ["main"]
@@ -24,6 +31,11 @@ on:
         description: "Build and check everything, publish nothing"
         type: boolean
         default: true
+      bump:
+        description: "Override the release bump (major is manual only)"
+        type: choice
+        options: [minor, patch, major]
+        default: minor
 
 permissions:
   contents: write        # create the release and upload assets
@@ -45,7 +57,9 @@ jobs:
       prerelease: ${{ steps.v.outputs.prerelease }}
       publish: ${{ steps.decide.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - id: v
         name: Read and cross-check the version
@@ -87,6 +101,16 @@ jobs:
           echo "version=$cargo_v"  >> "$GITHUB_OUTPUT"
           echo "npm_tag=$npm_tag"  >> "$GITHUB_OUTPUT"
           echo "npm dist-tag: $npm_tag"
+
+      - name: Check the version against the versioning policy
+        # Pre-release tags (v0.2.0-beta.1) are not releases here: the first
+        # plain version is a first release, then each is the next minor.
+        uses: nyuchi/.github/.github/actions/next-version@de909ab7468d998ba2cf87416ac2042616eba75d  # main, 2026-10-04
+        with:
+          channel: main
+          bump: ${{ inputs.bump || '' }}
+          manual: ${{ github.event_name == 'workflow_dispatch' }}
+          proposed: ${{ steps.v.outputs.version }}
 
       - id: decide
         name: Decide whether this run publishes
