@@ -105,7 +105,7 @@ jobs:
       - name: Check the version against the versioning policy
         # Pre-release tags (v0.2.0-beta.1) are not releases here: the first
         # plain version is a first release, then each is the next minor.
-        uses: nyuchi/.github/.github/actions/next-version@de909ab7468d998ba2cf87416ac2042616eba75d  # main, 2026-10-04
+        uses: nyuchi/.github/.github/actions/next-version@c2be05a22aeb6a98a80a9301f6b3e33bb88b20b0  # v0.2.0
         with:
           channel: main
           bump: ${{ inputs.bump || '' }}
