@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     # staging is the live beta (nyuchi/.github#80); it gets the same checks.
-    branches: [main, staging]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
