@@ -1,0 +1,17 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /mcp/ntl-postgres-mcp-server
+    # Stay on TypeScript 6.x until Astro and typescript-eslint support TS 7;
+    # remove then (owner, 2026-11).
+    ignore:
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+    schedule:
+      interval: weekly
+      day: monday
+    # A new release waits a week before Dependabot proposes it, so a hijacked
+    # or broken release has time to be caught and pulled first.
+    cooldown:
+      default-days: 7
