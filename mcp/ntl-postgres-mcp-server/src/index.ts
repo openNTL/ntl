@@ -83,6 +83,37 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 } as const;
 
+/**
+ * A 500 that tells the caller what kind of failure it was and nothing else.
+ *
+ * The underlying error can carry driver messages, connection details or a stack
+ * trace, none of which belong in a response to a caller. The detail goes to the
+ * Worker log (`wrangler tail`), tied to the response by `requestId`.
+ */
+function serverError(kind: "server_misconfigured" | "internal_error", error: unknown): Response {
+  const requestId = crypto.randomUUID();
+  console.error(
+    JSON.stringify({
+      level: "error",
+      kind,
+      requestId,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }),
+  );
+  return json(
+    {
+      error: kind,
+      message:
+        kind === "server_misconfigured"
+          ? "The server is misconfigured. The operator can find the reason in the Worker logs."
+          : "An internal error occurred.",
+      requestId,
+    },
+    500,
+  );
+}
+
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -108,15 +139,9 @@ export default {
     try {
       config = resolveConfig(env);
     } catch (error) {
-      // A misconfiguration is the operator's problem, not the caller's, and
-      // saying so plainly saves an hour of guessing.
-      return json(
-        {
-          error: "server_misconfigured",
-          message: error instanceof Error ? error.message : String(error),
-        },
-        500,
-      );
+      // A misconfiguration is the operator's problem, not the caller's: the
+      // reason goes to the Worker log, tied to the response by its requestId.
+      return serverError("server_misconfigured", error);
     }
 
     // Auth. Required rather than optional: this server holds database
@@ -175,13 +200,7 @@ export default {
       }
       return new Response(response.body, { status: response.status, headers });
     } catch (error) {
-      return json(
-        {
-          error: "internal_error",
-          message: error instanceof Error ? error.message : String(error),
-        },
-        500,
-      );
+      return serverError("internal_error", error);
     } finally {
       // Always release the connection. A Worker isolate can be evicted at any
       // point, and a leaked connection outlives the request that opened it.
