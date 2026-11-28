@@ -61,7 +61,7 @@ export function rowsToMarkdown(rows: Row[], columns?: string[]): string {
     }
     if (typeof value === "object") return `\`${JSON.stringify(value)}\``;
     // Pipes would break the table; escape rather than mangle.
-    return String(value).replace(/\|/g, "\\|").replace(/\n/g, " ");
+    return String(value).replace(/[\\|]/g, "\\$&").replace(/\n/g, " ");
   };
 
   const header = `| ${cols.join(" | ")} |`;
